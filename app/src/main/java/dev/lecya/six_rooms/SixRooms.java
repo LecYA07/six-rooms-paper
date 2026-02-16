@@ -20,6 +20,7 @@ import com.sk89q.worldedit.session.ClipboardHolder;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -36,6 +37,7 @@ import java.util.Base64;
 import java.nio.charset.StandardCharsets;
 import java.net.URL;
 import java.net.MalformedURLException;
+import java.util.Objects;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
@@ -75,6 +77,8 @@ import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.profile.PlayerProfile;
 import org.bukkit.profile.PlayerTextures;
+import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.configuration.file.YamlConfiguration;
 import su.plo.voice.api.addon.AddonInitializer;
 import su.plo.voice.api.addon.InjectPlasmoVoice;
 import su.plo.voice.api.addon.annotation.Addon;
@@ -105,8 +109,6 @@ public class SixRooms extends JavaPlugin implements Listener {
     private static final String SMILE_HEAD_BASE64 = "e3RleHR1cmVzOntTS0lOOnt1cmw6Imh0dHA6Ly90ZXh0dXJlcy5taW5lY3JhZnQubmV0L3RleHR1cmUvOGQzZmM3MzVhYWFlOGY3NDRiMTIyM2YwM2ZiY2ZiZWZlYzk5YWU2YzMxYTRjN2U0NTIwODBjYzRlZWE3YjZmOSJ9fX0=";
     private static final String ADMIN_PERMISSION = "sixrooms.admin";
     private static final String SCHEMATIC_NAME = "room.schem";
-    private static final String PHONE_TITLE = "Телефон";
-
     private final List<UUID> participants = new ArrayList<>();
     private final Map<UUID, Integer> playerNumbers = new HashMap<>();
     private final Map<UUID, CallSession> callsByPlayer = new HashMap<>();
@@ -119,6 +121,8 @@ public class SixRooms extends JavaPlugin implements Listener {
     private NamespacedKey phoneBlockKey;
     private NamespacedKey phoneTargetKey;
     private NamespacedKey phoneResetKey;
+    private FileConfiguration translations;
+    private String language = "ru";
     private SixRoomsVoiceAddon voiceAddon;
     private boolean debug = false;
     private BossBar roundPrepBar;
@@ -203,9 +207,41 @@ public class SixRooms extends JavaPlugin implements Listener {
         return state == GameState.RUNNING && playerNumbers.containsKey(playerId);
     }
 
+    private void loadTranslations() {
+        File file = new File(getDataFolder(), "lang.yml");
+        if (!file.exists()) {
+            saveResource("lang.yml", false);
+        }
+        translations = YamlConfiguration.loadConfiguration(file);
+        if (getResource("lang.yml") != null) {
+            YamlConfiguration defaults = YamlConfiguration.loadConfiguration(
+                new InputStreamReader(Objects.requireNonNull(getResource("lang.yml")), StandardCharsets.UTF_8)
+            );
+            translations.setDefaults(defaults);
+            translations.options().copyDefaults(true);
+        }
+    }
+
+    private String tr(String text, Object... args) {
+        String resolved = text;
+        if (!"ru".equalsIgnoreCase(language) && translations != null) {
+            String candidate = translations.getString(language + "." + text);
+            if (candidate != null) {
+                resolved = candidate;
+            }
+        }
+        if (args.length == 0) {
+            return resolved;
+        }
+        return String.format(Locale.ROOT, resolved, args);
+    }
+
     @Override
     public void onEnable() {
         getDataFolder().mkdirs();
+        saveDefaultConfig();
+        loadTranslations();
+        language = getConfig().getString("language", "ru").toLowerCase(Locale.ROOT);
         phoneItemKey = new NamespacedKey(this, "phone_item");
         phoneBlockKey = new NamespacedKey(this, "phone_block");
         phoneTargetKey = new NamespacedKey(this, "phone_target");
@@ -309,86 +345,86 @@ public class SixRooms extends JavaPlugin implements Listener {
 
     private void handleOpen(CommandSender sender) {
         if (!sender.hasPermission(ADMIN_PERMISSION)) {
-            sender.sendMessage("§cНет прав.");
+            sender.sendMessage(tr("§cНет прав."));
             return;
         }
         if (!(sender instanceof Player)) {
-            sender.sendMessage("§cКоманду можно выполнить только в игре.");
+            sender.sendMessage(tr("§cКоманду можно выполнить только в игре."));
             return;
         }
         if (state != GameState.IDLE) {
-            sender.sendMessage("§cРегистрация уже запущена или игра в процессе.");
+            sender.sendMessage(tr("§cРегистрация уже запущена или игра в процессе."));
             return;
         }
         participants.clear();
         playerNumbers.clear();
         baseLocation = ((Player) sender).getLocation();
         state = GameState.REGISTRATION;
-        sender.sendMessage("§aРегистрация открыта! §7Используйте §e/sixrooms join §7для входа.");
+        sender.sendMessage(tr("§aРегистрация открыта! §7Используйте §e/sixrooms join §7для входа."));
     }
 
     private void handleJoin(CommandSender sender) {
         if (!(sender instanceof Player)) {
-            sender.sendMessage("§cКоманду можно выполнить только в игре.");
+            sender.sendMessage(tr("§cКоманду можно выполнить только в игре."));
             return;
         }
         if (state != GameState.REGISTRATION) {
-            sender.sendMessage("§cРегистрация не активна.");
+            sender.sendMessage(tr("§cРегистрация не активна."));
             return;
         }
         Player player = (Player) sender;
         UUID id = player.getUniqueId();
         if (participants.contains(id)) {
-            player.sendMessage("§cВы уже зарегистрированы.");
+            player.sendMessage(tr("§cВы уже зарегистрированы."));
             return;
         }
         if (participants.size() >= MAX_PLAYERS) {
-            player.sendMessage("§cРегистрация заполнена.");
+            player.sendMessage(tr("§cРегистрация заполнена."));
             return;
         }
         participants.add(id);
-        player.sendMessage("§aВы успешно зарегистрировались!");
+        player.sendMessage(tr("§aВы успешно зарегистрировались!"));
         for (UUID participantId : participants) {
             Player participant = Bukkit.getPlayer(participantId);
             if (participant != null && participant.isOnline() && !participant.getUniqueId().equals(id)) {
-                participant.sendMessage("§eИгрок §a" + player.getName() + " §eприсоединился к игре. §7(" + participants.size() + "/" + MAX_PLAYERS + ")");
+                participant.sendMessage(tr("§eИгрок §a%s §eприсоединился к игре. §7(%d/%d)", player.getName(), participants.size(), MAX_PLAYERS));
             }
         }
     }
 
     private void handleLeave(CommandSender sender) {
         if (!(sender instanceof Player)) {
-            sender.sendMessage("§cКоманду можно выполнить только в игре.");
+            sender.sendMessage(tr("§cКоманду можно выполнить только в игре."));
             return;
         }
         if (state != GameState.REGISTRATION) {
-            sender.sendMessage("§cРегистрация не активна.");
+            sender.sendMessage(tr("§cРегистрация не активна."));
             return;
         }
         Player player = (Player) sender;
         if (participants.remove(player.getUniqueId())) {
-            player.sendMessage("§eВы покинули регистрацию.");
+            player.sendMessage(tr("§eВы покинули регистрацию."));
         } else {
-            player.sendMessage("§cВы не были зарегистрированы.");
+            player.sendMessage(tr("§cВы не были зарегистрированы."));
         }
     }
 
     private void handleStart(CommandSender sender) {
         if (!sender.hasPermission(ADMIN_PERMISSION)) {
-            sender.sendMessage("§cНет прав.");
+            sender.sendMessage(tr("§cНет прав."));
             return;
         }
         if (state != GameState.REGISTRATION) {
-            sender.sendMessage("§cРегистрация не активна.");
+            sender.sendMessage(tr("§cРегистрация не активна."));
             return;
         }
         int minPlayers = debug ? 2 : MIN_PLAYERS;
         if (participants.size() < minPlayers) {
-            sender.sendMessage("§cНедостаточно игроков для старта (минимум " + minPlayers + ").");
+            sender.sendMessage(tr("§cНедостаточно игроков для старта (минимум %d).", minPlayers));
             return;
         }
         if (baseLocation == null) {
-            sender.sendMessage("§cНе задана точка старта.");
+            sender.sendMessage(tr("§cНе задана точка старта."));
             return;
         }
         stopFirstRoundPreparation();
@@ -411,26 +447,26 @@ public class SixRooms extends JavaPlugin implements Listener {
 
         if (useSchematic) {
             if (!isWorldEditAvailable()) {
-                sender.sendMessage("§cWorldEdit не найден.");
+                sender.sendMessage(tr("§cWorldEdit не найден."));
                 return;
             }
             try (ClipboardReader reader = getClipboardReader(schematic)) {
                 if (reader == null) {
-                    sender.sendMessage("§cНе удалось прочитать схематику.");
+                    sender.sendMessage(tr("§cНе удалось прочитать схематику."));
                     return;
                 }
                 clipboard = reader.read();
             } catch (IOException e) {
-                sender.sendMessage("§cОшибка чтения схематики.");
+                sender.sendMessage(tr("§cОшибка чтения схематики."));
                 return;
             }
         } else {
-            sender.sendMessage("§eСхематика не найдена. Будет использована процедурная генерация.");
+            sender.sendMessage(tr("§eСхематика не найдена. Будет использована процедурная генерация."));
         }
 
         World world = baseLocation.getWorld();
         if (world == null) {
-            sender.sendMessage("§cМир недоступен.");
+            sender.sendMessage(tr("§cМир недоступен."));
             return;
         }
 
@@ -442,7 +478,7 @@ public class SixRooms extends JavaPlugin implements Listener {
             }
         }
         if (players.size() < minPlayers) {
-            sender.sendMessage("§cНедостаточно игроков онлайн (минимум " + minPlayers + ").");
+            sender.sendMessage(tr("§cНедостаточно игроков онлайн (минимум %d).", minPlayers));
             return;
         }
 
@@ -458,7 +494,7 @@ public class SixRooms extends JavaPlugin implements Listener {
             
             if (useSchematic) {
                 if (!pasteSchematic(clipboard, world, pasteTo)) {
-                    sender.sendMessage("§cОшибка при вставке схематики.");
+                    sender.sendMessage(tr("§cОшибка при вставке схематики."));
                     return;
                 }
             } else {
@@ -475,7 +511,7 @@ public class SixRooms extends JavaPlugin implements Listener {
             player.teleport(teleportTo);
             playerNumbers.put(player.getUniqueId(), number);
             roomCenters.put(player.getUniqueId(), teleportTo);
-            player.sendMessage("§aТвой номер: §e" + number + " §aиз §e" + totalPlayers);
+            player.sendMessage(tr("§aТвой номер: §e%d §aиз §e%d", number, totalPlayers));
         }
 
         state = GameState.RUNNING;
@@ -491,18 +527,18 @@ public class SixRooms extends JavaPlugin implements Listener {
                 String password = "sr-" + p.getUniqueId().toString().substring(0, 8);
                 // Create group (not persistent so it auto-deletes when empty)
                 p.performCommand("groups create name:" + groupName + " password:" + password);
-                
-                p.sendMessage("§aВы перешли в приватный канал связи.");
-                p.sendMessage("§7Используйте клавишу Группового Чата (по умолчанию 'V') для разговора.");
+
+                p.sendMessage(tr("§aВы перешли в приватный канал связи."));
+                p.sendMessage(tr("§7Используйте клавишу Группового Чата (по умолчанию 'V') для разговора."));
             }
         }
         
         getServer().broadcastMessage("");
-        getServer().broadcastMessage("§6§l---------------------------------------------");
-        getServer().broadcastMessage("§e                SIX ROOMS");
-        getServer().broadcastMessage("§a              Игра началась!");
-        getServer().broadcastMessage("§7   Участникам выданы телефоны. Удачи!");
-        getServer().broadcastMessage("§6§l---------------------------------------------");
+        getServer().broadcastMessage(tr("§6§l---------------------------------------------"));
+        getServer().broadcastMessage(tr("§e                SIX ROOMS"));
+        getServer().broadcastMessage(tr("§a              Игра началась!"));
+        getServer().broadcastMessage(tr("§7   Участникам выданы телефоны. Удачи!"));
+        getServer().broadcastMessage(tr("§6§l---------------------------------------------"));
         getServer().broadcastMessage("");
         
         startFirstRoundPreparation(players);
@@ -553,11 +589,11 @@ public class SixRooms extends JavaPlugin implements Listener {
 
     private void handleCancel(CommandSender sender) {
         if (!sender.hasPermission(ADMIN_PERMISSION)) {
-            sender.sendMessage("§cНет прав.");
+            sender.sendMessage(tr("§cНет прав."));
             return;
         }
         
-        endAllCalls("§eИгра отменена.");
+        endAllCalls(tr("§eИгра отменена."));
         stopFirstRoundPreparation();
         stopFirstRound();
         stopSecondRound();
@@ -570,10 +606,7 @@ public class SixRooms extends JavaPlugin implements Listener {
             Player p = Bukkit.getPlayer(playerId);
             if (p != null) {
                 p.performCommand("groups leave");
-                // Optionally delete the group if we are owner?
-                // p.performCommand("groups delete"); 
-                // But leave is enough to return to proximity.
-                p.sendMessage("§eПриватный канал связи отключен.");
+                p.sendMessage(tr("§eПриватный канал связи отключен."));
             }
         }
         
@@ -582,11 +615,11 @@ public class SixRooms extends JavaPlugin implements Listener {
         roomCenters.clear();
         state = GameState.IDLE;
         baseLocation = null;
-        sender.sendMessage("§eРегистрация отменена.");
+        sender.sendMessage(tr("§eРегистрация отменена."));
     }
 
     private void startFirstRoundPreparation(List<Player> players) {
-        startRoundPreparation(players, FIRST_ROUND_PREP_SECONDS, "§eДо начала первого раунда: §a", this::startNextRound);
+        startRoundPreparation(players, FIRST_ROUND_PREP_SECONDS, tr("§eДо начала первого раунда: §a"), this::startNextRound);
     }
 
     private void stopFirstRoundPreparation() {
@@ -641,7 +674,7 @@ public class SixRooms extends JavaPlugin implements Listener {
 
     private void startNextRound() {
         if (currentRound >= MAX_ROUNDS) {
-            finishGame("§eИгра окончена.");
+            finishGame(tr("§eИгра окончена."));
             return;
         }
         RoundType nextRound = getNextRoundType();
@@ -694,10 +727,10 @@ public class SixRooms extends JavaPlugin implements Listener {
             }
         }
         for (Player player : players) {
-            player.sendMessage("§6§lРаунд " + currentRound);
-            player.sendMessage("§eОпредели, у кого маска отличается от остальных.");
-            player.sendMessage("§eНапиши в чат ник или номер игрока.");
-            player.sendMessage("§7Сообщение увидишь только ты. Выбор можно менять.");
+            player.sendMessage(tr("§6§lРаунд %d", currentRound));
+            player.sendMessage(tr("§eОпредели, у кого маска отличается от остальных."));
+            player.sendMessage(tr("§eНапиши в чат ник или номер игрока."));
+            player.sendMessage(tr("§7Сообщение увидишь только ты. Выбор можно менять."));
         }
         startRoundBar(players, FIRST_ROUND_SECONDS);
         firstRoundTaskId = Bukkit.getScheduler().runTaskLater(this, this::endFirstRound, FIRST_ROUND_SECONDS * 20L).getTaskId();
@@ -726,19 +759,19 @@ public class SixRooms extends JavaPlugin implements Listener {
         }
         previousHelmets.clear();
         if (shouldFinishGame()) {
-            finishGame("§eИгра окончена.");
+            finishGame(tr("§eИгра окончена."));
             return;
         }
         List<Player> players = getOnlineParticipants();
         for (Player player : players) {
-            player.sendMessage("§eРаунд закончен. §7Подготовка 30 секунд.");
+            player.sendMessage(tr("§eРаунд закончен. §7Подготовка 30 секунд."));
         }
-        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, "§eПодготовка к раунду: §a", this::startNextRound);
+        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound);
         if (debug) {
             for (UUID playerId : playerNumbers.keySet()) {
                 Player player = Bukkit.getPlayer(playerId);
                 if (player != null && player.isOnline()) {
-                    player.sendMessage("§eБаллы: §a" + scores.getOrDefault(playerId, 0));
+                    player.sendMessage(tr("§eБаллы: §a%d", scores.getOrDefault(playerId, 0)));
                 }
             }
         }
@@ -784,17 +817,17 @@ public class SixRooms extends JavaPlugin implements Listener {
         boolean systemWord = random.nextBoolean();
         if (systemWord) {
             secondRoundWord = SECOND_ROUND_WORDS.get(random.nextInt(SECOND_ROUND_WORDS.size()));
-            wordOwner.sendMessage("§eТебе выдано слово: §a" + secondRoundWord);
-            wordOwner.sendMessage("§eТеперь ты можешь звонить.");
+            wordOwner.sendMessage(tr("§eТебе выдано слово: §a%s", secondRoundWord));
+            wordOwner.sendMessage(tr("§eТеперь ты можешь звонить."));
         } else {
             secondRoundAwaitingWord = true;
-            wordOwner.sendMessage("§eНапиши слово в чат. Его никто не увидит.");
+            wordOwner.sendMessage(tr("§eНапиши слово в чат. Его никто не увидит."));
         }
         for (Player player : players) {
-            player.sendMessage("§6§lРаунд " + currentRound);
-            player.sendMessage("§eУгадай слово по цепочке звонков.");
-            player.sendMessage("§eЗвонить может только тот, у кого сейчас слово.");
-            player.sendMessage("§7Время разговора 40 секунд. Пиши слово в чат.");
+            player.sendMessage(tr("§6§lРаунд %d", currentRound));
+            player.sendMessage(tr("§eУгадай слово по цепочке звонков."));
+            player.sendMessage(tr("§eЗвонить может только тот, у кого сейчас слово."));
+            player.sendMessage(tr("§7Время разговора 40 секунд. Пиши слово в чат."));
         }
         int totalSeconds = Math.max(1, (players.size() - 1) * 40);
         startRoundBar(players, totalSeconds);
@@ -817,19 +850,19 @@ public class SixRooms extends JavaPlugin implements Listener {
             scores.put(playerId, scores.getOrDefault(playerId, 0) + 1);
         }
         if (shouldFinishGame()) {
-            finishGame("§eИгра окончена.");
+            finishGame(tr("§eИгра окончена."));
             return;
         }
         List<Player> players = getOnlineParticipants();
         for (Player player : players) {
-            player.sendMessage("§eРаунд закончен. §7Подготовка 30 секунд.");
+            player.sendMessage(tr("§eРаунд закончен. §7Подготовка 30 секунд."));
         }
-        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, "§eПодготовка к раунду: §a", this::startNextRound);
+        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound);
         if (debug) {
             for (UUID playerId : playerNumbers.keySet()) {
                 Player player = Bukkit.getPlayer(playerId);
                 if (player != null && player.isOnline()) {
-                    player.sendMessage("§eБаллы: §a" + scores.getOrDefault(playerId, 0));
+                    player.sendMessage(tr("§eБаллы: §a%d", scores.getOrDefault(playerId, 0)));
                 }
             }
         }
@@ -860,7 +893,7 @@ public class SixRooms extends JavaPlugin implements Listener {
             if (tntHolderId != null) {
                 Player holder = Bukkit.getPlayer(tntHolderId);
                 if (holder != null && holder.isOnline()) {
-                    holder.sendMessage("§eТеперь можно передавать динамит.");
+                    holder.sendMessage(tr("§eТеперь можно передавать динамит."));
                 }
             }
         }, 5L * 20L).getTaskId();
@@ -902,9 +935,9 @@ public class SixRooms extends JavaPlugin implements Listener {
         scheduleTntTransferUnlock();
         List<Player> players = getOnlineParticipants();
         for (Player player : players) {
-            player.sendMessage("§eДинамит передан от §a" + sender.getName() + " §eк §a" + target.getName());
+            player.sendMessage(tr("§eДинамит передан от §a%s §eк §a%s", sender.getName(), target.getName()));
         }
-        target.sendMessage("§cДинамит в твоей комнате.");
+        target.sendMessage(tr("§cДинамит в твоей комнате."));
         return true;
     }
 
@@ -935,11 +968,11 @@ public class SixRooms extends JavaPlugin implements Listener {
         tnt.setIsIncendiary(false);
         tntEntityId = tnt.getUniqueId();
         for (Player player : players) {
-            player.sendMessage("§6§lРаунд " + currentRound);
-            player.sendMessage("§eДинамит уже подожжён.");
-            player.sendMessage("§eПередавать можно через 5 секунд.");
+            player.sendMessage(tr("§6§lРаунд %d", currentRound));
+            player.sendMessage(tr("§eДинамит уже подожжён."));
+            player.sendMessage(tr("§eПередавать можно через 5 секунд."));
         }
-        holder.sendMessage("§cДинамит в твоей комнате.");
+        holder.sendMessage(tr("§cДинамит в твоей комнате."));
         scheduleTntTransferUnlock();
     }
 
@@ -961,19 +994,19 @@ public class SixRooms extends JavaPlugin implements Listener {
             }
         }
         if (shouldFinishGame()) {
-            finishGame("§eИгра окончена.");
+            finishGame(tr("§eИгра окончена."));
             return;
         }
         List<Player> players = getOnlineParticipants();
         for (Player player : players) {
-            player.sendMessage("§eРаунд закончен. §7Подготовка 30 секунд.");
+            player.sendMessage(tr("§eРаунд закончен. §7Подготовка 30 секунд."));
         }
-        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, "§eПодготовка к раунду: §a", this::startNextRound);
+        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound);
         if (debug) {
             for (UUID playerId : playerNumbers.keySet()) {
                 Player player = Bukkit.getPlayer(playerId);
                 if (player != null && player.isOnline()) {
-                    player.sendMessage("§eБаллы: §a" + scores.getOrDefault(playerId, 0));
+                    player.sendMessage(tr("§eБаллы: §a%d", scores.getOrDefault(playerId, 0)));
                 }
             }
         }
@@ -1011,15 +1044,15 @@ public class SixRooms extends JavaPlugin implements Listener {
         ItemStack swordItem = new ItemStack(Material.IRON_SWORD);
         ItemMeta swordMeta = swordItem.getItemMeta();
         if (swordMeta != null) {
-            swordMeta.setDisplayName("§cМеч");
+            swordMeta.setDisplayName(tr("§cМеч"));
             swordItem.setItemMeta(swordMeta);
         }
         holder.getInventory().setItemInMainHand(swordItem);
         for (Player player : players) {
-            player.sendMessage("§6§lРаунд " + currentRound);
-            player.sendMessage("§eВыбери в телефоне, к кому хочешь прийти.");
+            player.sendMessage(tr("§6§lРаунд %d", currentRound));
+            player.sendMessage(tr("§eВыбери в телефоне, к кому хочешь прийти."));
         }
-        holder.sendMessage("§cУ тебя меч. Используй телефон для выбора цели.");
+        holder.sendMessage(tr("§cУ тебя меч. Используй телефон для выбора цели."));
         startRoundBar(players, SWORD_CHOICE_SECONDS);
         if (swordChoiceTaskId != -1) {
             Bukkit.getScheduler().cancelTask(swordChoiceTaskId);
@@ -1051,19 +1084,19 @@ public class SixRooms extends JavaPlugin implements Listener {
         fourthRoundActive = false;
         stopRoundBar();
         if (shouldFinishGame()) {
-            finishGame("§eИгра окончена.");
+            finishGame(tr("§eИгра окончена."));
             return;
         }
         List<Player> players = getOnlineParticipants();
         for (Player player : players) {
-            player.sendMessage("§eРаунд закончен. §7Подготовка 30 секунд.");
+            player.sendMessage(tr("§eРаунд закончен. §7Подготовка 30 секунд."));
         }
-        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, "§eПодготовка к раунду: §a", this::startNextRound);
+        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound);
         if (debug) {
             for (UUID playerId : playerNumbers.keySet()) {
                 Player player = Bukkit.getPlayer(playerId);
                 if (player != null && player.isOnline()) {
-                    player.sendMessage("§eБаллы: §a" + scores.getOrDefault(playerId, 0));
+                    player.sendMessage(tr("§eБаллы: §a%d", scores.getOrDefault(playerId, 0)));
                 }
             }
         }
@@ -1117,10 +1150,10 @@ public class SixRooms extends JavaPlugin implements Listener {
             targetLocation = target.getLocation();
         }
         holder.teleport(targetLocation);
-        holder.sendMessage("§eТы пришёл к игроку §a" + target.getName());
-        target.sendMessage("§eК тебе пришёл игрок §a" + holder.getName());
-        holder.sendMessage("§eУ вас 60 секунд на разговор.");
-        target.sendMessage("§eУ вас 60 секунд на разговор.");
+        holder.sendMessage(tr("§eТы пришёл к игроку §a%s", target.getName()));
+        target.sendMessage(tr("§eК тебе пришёл игрок §a%s", holder.getName()));
+        holder.sendMessage(tr("§eУ вас 60 секунд на разговор."));
+        target.sendMessage(tr("§eУ вас 60 секунд на разговор."));
         startRoundBar(getOnlineParticipants(), SWORD_VISIT_SECONDS);
         if (swordVisitTaskId != -1) {
             Bukkit.getScheduler().cancelTask(swordVisitTaskId);
@@ -1141,7 +1174,7 @@ public class SixRooms extends JavaPlugin implements Listener {
         scores.put(target.getUniqueId(), scores.getOrDefault(target.getUniqueId(), 0) - 1);
         List<Player> players = getOnlineParticipants();
         for (Player player : players) {
-            player.sendMessage("§eИгрок §a" + holder.getName() + " §eударил игрока §a" + target.getName());
+            player.sendMessage(tr("§eИгрок §a%s §eударил игрока §a%s", holder.getName(), target.getName()));
         }
         if (swordVisitTaskId != -1) {
             Bukkit.getScheduler().cancelTask(swordVisitTaskId);
@@ -1185,8 +1218,8 @@ public class SixRooms extends JavaPlugin implements Listener {
             return;
         }
         for (Player player : players) {
-            player.sendMessage("§6§lРаунд " + currentRound);
-            player.sendMessage("§eВыбери: открыть дверь или остаться.");
+            player.sendMessage(tr("§6§lРаунд %d", currentRound));
+            player.sendMessage(tr("§eВыбери: открыть дверь или остаться."));
         }
         if (!usingSchematicRooms) {
             for (Player player : players) {
@@ -1223,23 +1256,25 @@ public class SixRooms extends JavaPlugin implements Listener {
             }
         }
         List<Player> players = getOnlineParticipants();
-        String resultMessage = odd ? "§aНечётное число открытых дверей. Открывшие получают +1." : "§cЧётное число открытых дверей. Открывшие получают -1.";
+        String resultMessage = odd
+            ? tr("§aНечётное число открытых дверей. Открывшие получают +1.")
+            : tr("§cЧётное число открытых дверей. Открывшие получают -1.");
         for (Player player : players) {
             player.sendMessage(resultMessage);
         }
         if (shouldFinishGame()) {
-            finishGame("§eИгра окончена.");
+            finishGame(tr("§eИгра окончена."));
             return;
         }
         for (Player player : players) {
-            player.sendMessage("§eРаунд закончен. §7Подготовка 30 секунд.");
+            player.sendMessage(tr("§eРаунд закончен. §7Подготовка 30 секунд."));
         }
-        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, "§eПодготовка к раунду: §a", this::startNextRound);
+        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound);
         if (debug) {
             for (UUID playerId : playerNumbers.keySet()) {
                 Player player = Bukkit.getPlayer(playerId);
                 if (player != null && player.isOnline()) {
-                    player.sendMessage("§eБаллы: §a" + scores.getOrDefault(playerId, 0));
+                    player.sendMessage(tr("§eБаллы: §a%d", scores.getOrDefault(playerId, 0)));
                 }
             }
         }
@@ -1285,8 +1320,8 @@ public class SixRooms extends JavaPlugin implements Listener {
         placeDoorRoundPlate(stayLoc);
         doorOpenPlateLocations.put(player.getUniqueId(), openLoc);
         doorStayPlateLocations.put(player.getUniqueId(), stayLoc);
-        spawnDoorRoundHologram(openLoc, "§aОткрыть");
-        spawnDoorRoundHologram(stayLoc, "§eОстаться");
+        spawnDoorRoundHologram(openLoc, tr("§aОткрыть"));
+        spawnDoorRoundHologram(stayLoc, tr("§eОстаться"));
     }
 
     private void placeDoorRoundPlate(Location location) {
@@ -1316,7 +1351,7 @@ public class SixRooms extends JavaPlugin implements Listener {
             return;
         }
         doorsRoundChoices.put(player.getUniqueId(), opened);
-        player.sendMessage(opened ? "§eВы выбрали: §aОткрыть" : "§eВы выбрали: §aОстаться");
+        player.sendMessage(opened ? tr("§eВы выбрали: §aОткрыть") : tr("§eВы выбрали: §aОстаться"));
     }
 
     private boolean isSameBlock(Location first, Location second) {
@@ -1365,7 +1400,7 @@ public class SixRooms extends JavaPlugin implements Listener {
             Player player = Bukkit.getPlayer(playerId);
             if (player != null) {
                 player.performCommand("groups leave");
-                player.sendMessage("§eПриватный канал связи отключен.");
+                player.sendMessage(tr("§eПриватный канал связи отключен."));
             }
         }
         participants.clear();
@@ -1404,26 +1439,26 @@ public class SixRooms extends JavaPlugin implements Listener {
         UUID playerId = player.getUniqueId();
         if (secondRoundAwaitingWord && playerId.equals(secondRoundWordOwner)) {
             if (message.isEmpty()) {
-                player.sendMessage("§cСлово не может быть пустым.");
+                player.sendMessage(tr("§cСлово не может быть пустым."));
                 return;
             }
             secondRoundWord = message;
             secondRoundAwaitingWord = false;
-            player.sendMessage("§7Слово установлено. Теперь ты можешь звонить.");
+            player.sendMessage(tr("§7Слово установлено. Теперь ты можешь звонить."));
             return;
         }
         if (secondRoundWord == null) {
-            player.sendMessage("§7Слово ещё не задано.");
+            player.sendMessage(tr("§7Слово ещё не задано."));
             return;
         }
         if (playerId.equals(secondRoundWordOwner)) {
-            player.sendMessage("§7Ты уже знаешь слово.");
+            player.sendMessage(tr("§7Ты уже знаешь слово."));
             return;
         }
         if (message.equalsIgnoreCase(secondRoundWord)) {
             secondRoundCorrectGuessers.add(playerId);
         }
-        player.sendMessage("§7Ответ сохранён.");
+        player.sendMessage(tr("§7Ответ сохранён."));
     }
 
     private void handleSecondRoundCallEnded(UUID callerId, UUID calleeId) {
@@ -1434,7 +1469,7 @@ public class SixRooms extends JavaPlugin implements Listener {
         secondRoundCurrentCaller = calleeId;
         Player callee = Bukkit.getPlayer(calleeId);
         if (callee != null && callee.isOnline()) {
-            callee.sendMessage("§eТеперь ты можешь звонить.");
+            callee.sendMessage(tr("§eТеперь ты можешь звонить."));
         }
         if (secondRoundCalled.size() >= playerNumbers.size()) {
             endSecondRound();
@@ -1546,11 +1581,11 @@ public class SixRooms extends JavaPlugin implements Listener {
         }
         UUID targetId = resolvePlayerChoice(message);
         if (targetId == null) {
-            player.sendMessage("§cНеверный выбор. Напиши ник или номер игрока.");
+            player.sendMessage(tr("§cНеверный выбор. Напиши ник или номер игрока."));
             return;
         }
         firstRoundChoices.put(player.getUniqueId(), targetId);
-        player.sendMessage("§7Выбор сохранён.");
+        player.sendMessage(tr("§7Выбор сохранён."));
     }
 
     private UUID resolvePlayerChoice(String message) {
@@ -1573,34 +1608,34 @@ public class SixRooms extends JavaPlugin implements Listener {
     }
 
     private void handleStatus(CommandSender sender) {
-        sender.sendMessage("§eСтатус: §a" + state.name() + "§e, игроков: §a" + participants.size());
+        sender.sendMessage(tr("§eСтатус: §a%s§e, игроков: §a%d", state.name(), participants.size()));
     }
 
     private void sendUsage(CommandSender sender) {
-        sender.sendMessage("§eИспользование: §7/sixrooms open|join|leave|start|cancel|status|phone");
+        sender.sendMessage(tr("§eИспользование: §7/sixrooms open|join|leave|start|cancel|status|phone"));
     }
 
     private void handlePhone(CommandSender sender) {
         if (!sender.hasPermission(ADMIN_PERMISSION)) {
-            sender.sendMessage("§cНет прав.");
+            sender.sendMessage(tr("§cНет прав."));
             return;
         }
         if (!(sender instanceof Player)) {
-            sender.sendMessage("§cКоманду можно выполнить только в игре.");
+            sender.sendMessage(tr("§cКоманду можно выполнить только в игре."));
             return;
         }
         Player player = (Player) sender;
         player.getInventory().addItem(createPhoneItem());
-        player.sendMessage("§aТелефон выдан.");
+        player.sendMessage(tr("§aТелефон выдан."));
     }
 
     private void handleDebug(CommandSender sender) {
         if (!sender.hasPermission(ADMIN_PERMISSION)) {
-            sender.sendMessage("§cНет прав.");
+            sender.sendMessage(tr("§cНет прав."));
             return;
         }
         debug = !debug;
-        sender.sendMessage("§eDebug mode: " + (debug ? "§aON" : "§cOFF"));
+        sender.sendMessage(tr("§eРежим отладки: %s", debug ? tr("§aВКЛ") : tr("§cВЫКЛ")));
     }
 
     private ClipboardReader getClipboardReader(File schematic) throws IOException {
@@ -1800,7 +1835,7 @@ public class SixRooms extends JavaPlugin implements Listener {
             return;
         }
         if (secondRoundActive && !canSecondRoundCall(player.getUniqueId())) {
-            player.sendMessage("§cСейчас нельзя звонить.");
+            player.sendMessage(tr("§cСейчас нельзя звонить."));
             return;
         }
         openPhoneGui(player);
@@ -1828,9 +1863,9 @@ public class SixRooms extends JavaPlugin implements Listener {
             Player caller = (Player) event.getWhoClicked();
             CallSession call = callsByPlayer.get(caller.getUniqueId());
             if (call != null) {
-                endCall(call, "§eЗвонок завершен.");
+                endCall(call, tr("§eЗвонок завершен."));
             } else {
-                caller.sendMessage("§7Нет активного звонка.");
+                caller.sendMessage(tr("§7Нет активного звонка."));
             }
             caller.closeInventory();
             return;
@@ -1842,27 +1877,27 @@ public class SixRooms extends JavaPlugin implements Listener {
         Player caller = (Player) event.getWhoClicked();
         if (fourthRoundActive && swordHolderId != null && swordHolderId.equals(caller.getUniqueId())) {
             if (swordUsed) {
-                caller.sendMessage("§cМеч уже использован.");
+                caller.sendMessage(tr("§cМеч уже использован."));
                 return;
             }
             if (swordVisitActive) {
-                caller.sendMessage("§cТы уже выбрал цель.");
+                caller.sendMessage(tr("§cТы уже выбрал цель."));
                 return;
             }
             UUID targetUuid;
             try {
                 targetUuid = UUID.fromString(targetId);
             } catch (IllegalArgumentException e) {
-                caller.sendMessage("§cОшибка: неверный формат ID (" + targetId + ")");
+                caller.sendMessage(tr("§cОшибка: неверный формат ID (%s)", targetId));
                 return;
             }
             if (caller.getUniqueId().equals(targetUuid)) {
-                caller.sendMessage("§cНельзя выбрать себя.");
+                caller.sendMessage(tr("§cНельзя выбрать себя."));
                 return;
             }
             Player target = Bukkit.getPlayer(targetUuid);
             if (target == null || !target.isOnline()) {
-                caller.sendMessage("§cИгрок не в сети.");
+                caller.sendMessage(tr("§cИгрок не в сети."));
                 return;
             }
             caller.closeInventory();
@@ -1871,66 +1906,66 @@ public class SixRooms extends JavaPlugin implements Listener {
         }
         if (thirdRoundActive && tntHolderId != null && tntHolderId.equals(caller.getUniqueId())) {
             if (!tntTransferAllowed) {
-                caller.sendMessage("§cПередача ещё недоступна.");
+                caller.sendMessage(tr("§cПередача ещё недоступна."));
                 return;
             }
             UUID targetUuid;
             try {
                 targetUuid = UUID.fromString(targetId);
             } catch (IllegalArgumentException e) {
-                caller.sendMessage("§cОшибка: неверный формат ID (" + targetId + ")");
+                caller.sendMessage(tr("§cОшибка: неверный формат ID (%s)", targetId));
                 return;
             }
             if (caller.getUniqueId().equals(targetUuid)) {
-                caller.sendMessage("§cНельзя передать себе.");
+                caller.sendMessage(tr("§cНельзя передать себе."));
                 return;
             }
             if (tntLastHolderId != null && tntLastHolderId.equals(targetUuid)) {
-                caller.sendMessage("§cНельзя передать тому, кто передал тебе.");
+                caller.sendMessage(tr("§cНельзя передать тому, кто передал тебе."));
                 return;
             }
             Player target = Bukkit.getPlayer(targetUuid);
             if (target == null || !target.isOnline()) {
-                caller.sendMessage("§cИгрок не в сети.");
+                caller.sendMessage(tr("§cИгрок не в сети."));
                 return;
             }
             if (!transferTntTo(caller, target)) {
-                caller.sendMessage("§cДинамит не найден.");
+                caller.sendMessage(tr("§cДинамит не найден."));
                 return;
             }
             caller.closeInventory();
             return;
         }
         if (secondRoundActive && !canSecondRoundCall(caller.getUniqueId())) {
-            caller.sendMessage("§cСейчас нельзя звонить.");
+            caller.sendMessage(tr("§cСейчас нельзя звонить."));
             return;
         }
         UUID targetUuid;
         try {
             targetUuid = UUID.fromString(targetId);
         } catch (IllegalArgumentException e) {
-            caller.sendMessage("§cОшибка: неверный формат ID (" + targetId + ")");
+            caller.sendMessage(tr("§cОшибка: неверный формат ID (%s)", targetId));
             return;
         }
         if (caller.getUniqueId().equals(targetUuid)) {
-            caller.sendMessage("§cНельзя звонить себе.");
+            caller.sendMessage(tr("§cНельзя звонить себе."));
             return;
         }
         if (secondRoundActive && secondRoundCalled.contains(targetUuid)) {
-            caller.sendMessage("§cЭтот игрок уже получил звонок.");
+            caller.sendMessage(tr("§cЭтот игрок уже получил звонок."));
             return;
         }
         if (callsByPlayer.containsKey(caller.getUniqueId())) {
-            caller.sendMessage("§cТы уже в звонке.");
+            caller.sendMessage(tr("§cТы уже в звонке."));
             return;
         }
         if (callsByPlayer.containsKey(targetUuid)) {
-            caller.sendMessage("§cАбонент занят.");
+            caller.sendMessage(tr("§cАбонент занят."));
             return;
         }
         Player target = Bukkit.getPlayer(targetUuid);
         if (target == null || !target.isOnline()) {
-            caller.sendMessage("§cАбонент не в сети.");
+            caller.sendMessage(tr("§cАбонент не в сети."));
             return;
         }
         caller.closeInventory();
@@ -1941,7 +1976,7 @@ public class SixRooms extends JavaPlugin implements Listener {
     public void onPlayerQuit(PlayerQuitEvent event) {
         CallSession call = callsByPlayer.get(event.getPlayer().getUniqueId());
         if (call != null) {
-            endCall(call, "§eЗвонок завершен.");
+            endCall(call, tr("§eЗвонок завершен."));
         }
     }
 
@@ -1983,7 +2018,7 @@ public class SixRooms extends JavaPlugin implements Listener {
             return;
         }
         event.setCancelled(true);
-        event.getPlayer().sendMessage("§7Сообщение скрыто.");
+        event.getPlayer().sendMessage(tr("§7Сообщение скрыто."));
         return;
     }
 
@@ -1991,7 +2026,7 @@ public class SixRooms extends JavaPlugin implements Listener {
         ItemStack item = new ItemStack(Material.BARREL);
         ItemMeta meta = item.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName("Телефон");
+            meta.setDisplayName(tr("Телефон"));
             meta.getPersistentDataContainer().set(phoneItemKey, PersistentDataType.BYTE, (byte) 1);
             item.setItemMeta(meta);
         }
@@ -2020,56 +2055,56 @@ public class SixRooms extends JavaPlugin implements Listener {
 
     private void openPhoneGui(Player player) {
         if (state != GameState.RUNNING) {
-            player.sendMessage("§cИгра не запущена.");
+            player.sendMessage(tr("§cИгра не запущена."));
             return;
         }
         if (!playerNumbers.containsKey(player.getUniqueId())) {
-            player.sendMessage("§cТы не участвуешь в игре.");
+            player.sendMessage(tr("§cТы не участвуешь в игре."));
             return;
         }
-        Inventory inventory = Bukkit.createInventory(new PhoneInventoryHolder(), 54, PHONE_TITLE);
+        Inventory inventory = Bukkit.createInventory(new PhoneInventoryHolder(), 54, tr("Телефон"));
 
         // Round Info
         ItemStack infoItem = new ItemStack(Material.PAPER);
         ItemMeta infoMeta = infoItem.getItemMeta();
         if (infoMeta != null) {
-            infoMeta.setDisplayName("§eСтадия раунда");
+            infoMeta.setDisplayName(tr("§eСтадия раунда"));
             List<String> lore = new ArrayList<>();
             if (firstRoundActive) {
-                lore.add("§7Раунд с масками");
+                lore.add(tr("§7Раунд с масками"));
             } else if (secondRoundActive) {
-                lore.add("§7Раунд с угадыванием слова");
+                lore.add(tr("§7Раунд с угадыванием слова"));
             } else if (thirdRoundActive) {
-                lore.add("§7Раунд с динамитом");
+                lore.add(tr("§7Раунд с динамитом"));
                 if (tntHolderId != null) {
                     if (tntHolderId.equals(player.getUniqueId())) {
-                        lore.add("§cДинамит у тебя");
-                        lore.add(tntTransferAllowed ? "§eПередача доступна" : "§7Передача через 5 секунд");
+                        lore.add(tr("§cДинамит у тебя"));
+                        lore.add(tntTransferAllowed ? tr("§eПередача доступна") : tr("§7Передача через 5 секунд"));
                     } else {
                         Player holder = Bukkit.getPlayer(tntHolderId);
                         if (holder != null) {
                             Integer number = playerNumbers.get(holder.getUniqueId());
-                            lore.add("§7Динамит у игрока №" + (number != null ? number : "?"));
+                            lore.add(tr("§7Динамит у игрока №%s", number != null ? number.toString() : "?"));
                         }
                     }
                 }
             } else if (fourthRoundActive) {
-                lore.add("§7Раунд с мечом");
+                lore.add(tr("§7Раунд с мечом"));
                 if (swordHolderId != null) {
                     if (swordHolderId.equals(player.getUniqueId())) {
-                        lore.add("§cМеч у тебя");
+                        lore.add(tr("§cМеч у тебя"));
                     } else {
                         Player holder = Bukkit.getPlayer(swordHolderId);
                         if (holder != null) {
                             Integer number = playerNumbers.get(holder.getUniqueId());
-                            lore.add("§7Меч у игрока №" + (number != null ? number : "?"));
+                            lore.add(tr("§7Меч у игрока №%s", number != null ? number.toString() : "?"));
                         }
                     }
                 }
             } else if (doorsRoundActive) {
-                lore.add("§7Раунд с дверями");
+                lore.add(tr("§7Раунд с дверями"));
             } else {
-                lore.add("§7Подготовка к раунду");
+                lore.add(tr("§7Подготовка к раунду"));
             }
             infoMeta.setLore(lore);
             infoItem.setItemMeta(infoMeta);
@@ -2078,7 +2113,7 @@ public class SixRooms extends JavaPlugin implements Listener {
         ItemStack resetItem = new ItemStack(Material.BARRIER);
         ItemMeta resetMeta = resetItem.getItemMeta();
         if (resetMeta != null) {
-            resetMeta.setDisplayName("§cСбросить");
+            resetMeta.setDisplayName(tr("§cСбросить"));
             resetMeta.getPersistentDataContainer().set(phoneResetKey, PersistentDataType.STRING, "reset");
             resetItem.setItemMeta(resetMeta);
         }
@@ -2117,7 +2152,9 @@ public class SixRooms extends JavaPlugin implements Listener {
             ItemStack item = new ItemStack(Material.PLAYER_HEAD);
             SkullMeta meta = (SkullMeta) item.getItemMeta();
             if (meta != null) {
-                meta.setDisplayName(busy ? "§c№" + number + " §7" + target.getName() + " (Занят)" : "§a№" + number + " §7" + target.getName());
+                meta.setDisplayName(busy
+                    ? tr("§c№%d §7%s (Занят)", number, target.getName())
+                    : tr("§a№%d §7%s", number, target.getName()));
                 meta.setOwningPlayer(target);
                 meta.getPersistentDataContainer().set(phoneTargetKey, PersistentDataType.STRING, targetUuid.toString());
                 item.setItemMeta(meta);
@@ -2141,8 +2178,8 @@ public class SixRooms extends JavaPlugin implements Listener {
         caller.performCommand("groups create name:" + groupName + " password:" + password);
 
         int number = playerNumbers.getOrDefault(callee.getUniqueId(), -1);
-        caller.sendMessage("§eЗвонок на номер §a" + number + "§e...");
-        callee.sendMessage("§eТебе звонят! §aПКМ по телефону §eдля ответа.");
+        caller.sendMessage(tr("§eЗвонок на номер §a%d§e...", number));
+        callee.sendMessage(tr("§eТебе звонят! §aПКМ по телефону §eдля ответа."));
         callee.playSound(callee.getLocation(), Sound.BLOCK_NOTE_BLOCK_BELL, 1.0f, 1.0f);
     }
 
@@ -2150,7 +2187,7 @@ public class SixRooms extends JavaPlugin implements Listener {
         Player caller = Bukkit.getPlayer(session.caller);
         Player callee = Bukkit.getPlayer(session.callee);
         if (caller == null || callee == null) {
-            endCall(session, "Звонок завершен.");
+            endCall(session, tr("§eЗвонок завершен."));
             return;
         }
         
@@ -2175,11 +2212,11 @@ public class SixRooms extends JavaPlugin implements Listener {
         if (groupUuid != null) {
             callee.performCommand("groups join " + groupUuid.toString() + " " + password);
         } else {
-            callee.sendMessage("§cОшибка: группа звонящего не найдена.");
+            callee.sendMessage(tr("§cОшибка: группа звонящего не найдена."));
         }
         
-        caller.sendMessage("§aЗвонок принят.");
-        callee.sendMessage("§aЗвонок принят.");
+        caller.sendMessage(tr("§aЗвонок принят."));
+        callee.sendMessage(tr("§aЗвонок принят."));
         if (secondRoundActive) {
             if (secondRoundCallTaskId != -1) {
                 Bukkit.getScheduler().cancelTask(secondRoundCallTaskId);
@@ -2187,7 +2224,7 @@ public class SixRooms extends JavaPlugin implements Listener {
             secondRoundCallTaskId = Bukkit.getScheduler().runTaskLater(this, () -> {
                 CallSession current = callsByPlayer.get(session.caller);
                 if (current != null && current.state == CallState.ACTIVE && current.caller.equals(session.caller) && current.callee.equals(session.callee)) {
-                    endCall(current, "§eВремя разговора вышло.");
+                    endCall(current, tr("§eВремя разговора вышло."));
                 }
             }, 40L * 20L).getTaskId();
         }
@@ -2205,7 +2242,7 @@ public class SixRooms extends JavaPlugin implements Listener {
         Player callee = Bukkit.getPlayer(session.callee);
         
         if (caller != null) {
-            caller.sendMessage(reason != null ? reason : "§eЗвонок завершен.");
+            caller.sendMessage(reason != null ? reason : tr("§eЗвонок завершен."));
             // Caller is already in their own group (since callee joined them), no action needed
             // Unless caller joined callee? In my logic: Callee joins Caller.
             // So Caller stays in "SixRooms-Caller".
@@ -2213,7 +2250,7 @@ public class SixRooms extends JavaPlugin implements Listener {
         }
         
         if (callee != null) {
-            callee.sendMessage(reason != null ? reason : "§eЗвонок завершен.");
+            callee.sendMessage(reason != null ? reason : tr("§eЗвонок завершен."));
             
             // Callee leaves Caller's group and returns to their own (re-create as it was auto-deleted)
             callee.performCommand("groups leave");
