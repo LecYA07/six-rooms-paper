@@ -1,0 +1,8 @@
+folia-supported: true
+api-version: '1.16'
+load: STARTUP
+depend: [PlasmoVoice]
+name: pv-addon-groups
+main: su.plo.voice.groups.server.BukkitEntryPoint
+version: 1.1.1
+authors: [KPidS]
