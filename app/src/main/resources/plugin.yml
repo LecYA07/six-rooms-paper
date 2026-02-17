@@ -13,7 +13,7 @@ api-version: 1.21
 commands:
   sixrooms:
     description: Управление регистрацией и запуском игры
-    usage: /sixrooms open|join|leave|start|cancel|status|phone
+    usage: /sixrooms open|join|leave|start|cancel|status|phone|vote|exclude
     aliases: [sr, rooms]
 permissions:
   sixrooms.admin:

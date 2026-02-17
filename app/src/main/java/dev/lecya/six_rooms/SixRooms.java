@@ -16,7 +16,10 @@ import com.sk89q.worldedit.extent.clipboard.io.ClipboardReader;
 import com.sk89q.worldedit.function.operation.Operation;
 import com.sk89q.worldedit.function.operation.Operations;
 import com.sk89q.worldedit.math.BlockVector3;
+import com.sk89q.worldedit.regions.CuboidRegion;
 import com.sk89q.worldedit.session.ClipboardHolder;
+import com.sk89q.worldedit.world.block.BlockType;
+import com.sk89q.worldedit.world.block.BlockTypes;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -38,6 +41,10 @@ import java.nio.charset.StandardCharsets;
 import java.net.URL;
 import java.net.MalformedURLException;
 import java.util.Objects;
+import net.md_5.bungee.api.ChatColor;
+import net.md_5.bungee.api.chat.BaseComponent;
+import net.md_5.bungee.api.chat.ClickEvent;
+import net.md_5.bungee.api.chat.TextComponent;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
@@ -62,13 +69,16 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
+import org.bukkit.event.entity.EntityShootBowEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.BookMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.SkullMeta;
 import org.bukkit.persistence.PersistentDataContainer;
@@ -99,28 +109,52 @@ public class SixRooms extends JavaPlugin implements Listener {
     private static final int FIRST_ROUND_PREP_SECONDS = 60;
     private static final int FIRST_ROUND_SECONDS = 150;
     private static final int BETWEEN_ROUND_PREP_SECONDS = 30;
+    private static final int ROUND_MIN_EXTRA_SECONDS = 90;
+    private static final int ROUND_EXTRA_SECONDS_PER_PLAYER = 10;
+    private static final int SECOND_ROUND_CALL_SECONDS = 40;
+    private static final int TNT_TRANSFER_LOCK_SECONDS = 5;
+    private static final int TNT_FUSE_MIN_SECONDS = 90;
+    private static final int TNT_FUSE_MAX_SECONDS = 210;
     private static final int SWORD_CHOICE_SECONDS = 90;
     private static final int SWORD_VISIT_SECONDS = 60;
     private static final int DOORS_ROUND_SECONDS = 90;
+    private static final int VOTE_ROUND_SECONDS = 90;
+    private static final int ROULETTE_TIMEOUT_SECONDS = 20;
+    private static final int ROULETTE_CHAMBER_MULTIPLIER = 2;
+    private static final int MEMORY_STUDY_SECONDS = 15;
+    private static final int MEMORY_TURN_SECONDS = 20;
+    private static final int MEMORY_WORDS_PER_PLAYER = 5;
+    private static final int BANK_CALL_SECONDS = 60;
+    private static final int BANK_TURN_SECONDS = 15;
+    private static final int EXCLUDE_ROUND_SECONDS = 90;
     private static final int MAX_ROUNDS = 8;
     private static final int MAX_SCORE = 20;
     private static final String CLOWN_HEAD_BASE64 = "e3RleHR1cmVzOntTS0lOOnt1cmw6Imh0dHA6Ly90ZXh0dXJlcy5taW5lY3JhZnQubmV0L3RleHR1cmUvMjc0ZjZiNmEwYTY5MzVlNTA3M2M2MTY2NGZmODljZWVmMGFjYTY3NmM3NzgxMDE3NTFlMjMyY2Q3Yjc5MWZiMyJ9fX0=";
     private static final String PEPE_HEAD_BASE64 = "e3RleHR1cmVzOntTS0lOOnt1cmw6Imh0dHA6Ly90ZXh0dXJlcy5taW5lY3JhZnQubmV0L3RleHR1cmUvZDkzNjMzYWEzYmQyOWRkZGZmMTlmMmQzZjQyZDFhZWRiOTczNWM5ODUwMWU5NjEwMjRmYmVhYTg3YjM3ZmU1ZSJ9fX0=";
     private static final String SMILE_HEAD_BASE64 = "e3RleHR1cmVzOntTS0lOOnt1cmw6Imh0dHA6Ly90ZXh0dXJlcy5taW5lY3JhZnQubmV0L3RleHR1cmUvOGQzZmM3MzVhYWFlOGY3NDRiMTIyM2YwM2ZiY2ZiZWZlYzk5YWU2YzMxYTRjN2U0NTIwODBjYzRlZWE3YjZmOSJ9fX0=";
     private static final String ADMIN_PERMISSION = "sixrooms.admin";
-    private static final String SCHEMATIC_NAME = "room.schem";
     private final List<UUID> participants = new ArrayList<>();
     private final Map<UUID, Integer> playerNumbers = new HashMap<>();
     private final Map<UUID, CallSession> callsByPlayer = new HashMap<>();
     private final Map<UUID, Integer> scores = new HashMap<>();
     private final Map<UUID, UUID> firstRoundChoices = new HashMap<>();
     private final Map<UUID, ItemStack> previousHelmets = new HashMap<>();
+    private final Map<UUID, ItemStack> roulettePreviousItems = new HashMap<>();
+    private final Map<UUID, InventorySnapshot> savedInventories = new HashMap<>();
+    private final Map<UUID, Location> savedLocations = new HashMap<>();
+    private final List<CuboidRegion> schematicRegions = new ArrayList<>();
     private GameState state = GameState.IDLE;
     private Location baseLocation;
     private NamespacedKey phoneItemKey;
     private NamespacedKey phoneBlockKey;
     private NamespacedKey phoneTargetKey;
     private NamespacedKey phoneResetKey;
+    private NamespacedKey voteBookKey;
+    private NamespacedKey maskBookKey;
+    private NamespacedKey revolverItemKey;
+    private NamespacedKey rouletteAmmoKey;
+    private NamespacedKey memoryBookKey;
+    private NamespacedKey excludeBookKey;
     private FileConfiguration translations;
     private String language = "ru";
     private SixRoomsVoiceAddon voiceAddon;
@@ -129,15 +163,17 @@ public class SixRooms extends JavaPlugin implements Listener {
     private int roundPrepTaskId = -1;
     private BossBar roundBar;
     private int roundBarTaskId = -1;
+    private int regenTaskId = -1;
     private int firstRoundTaskId = -1;
     private boolean firstRoundActive = false;
     private UUID clownPlayerId;
     private int currentRound = 0;
     private RoundType currentRoundType = RoundType.FIRST;
+    private RoundType nextRoundType;
     private final Random random = new Random();
-    private final List<RoundType> roundPool = List.of(RoundType.FIRST, RoundType.SECOND, RoundType.THIRD, RoundType.FIFTH);
+    private final List<RoundType> roundPool = List.of(RoundType.FIRST, RoundType.SECOND, RoundType.THIRD, RoundType.FIFTH, RoundType.SIXTH, RoundType.SEVENTH, RoundType.EIGHTH, RoundType.NINTH, RoundType.TENTH);
     private final List<RoundType> remainingRoundPool = new ArrayList<>();
-    private final Map<Integer, RoundType> fixedRoundSlots = new HashMap<>();
+    private final Map<Integer, List<RoundType>> fixedRoundSlots = new HashMap<>();
     private final Map<UUID, Location> roomCenters = new HashMap<>();
     private boolean usingSchematicRooms = false;
     private boolean secondRoundActive = false;
@@ -146,6 +182,7 @@ public class SixRooms extends JavaPlugin implements Listener {
     private String secondRoundWord;
     private boolean secondRoundAwaitingWord = false;
     private final Set<UUID> secondRoundCalled = new HashSet<>();
+    private final Map<UUID, UUID> secondRoundLastCaller = new HashMap<>();
     private final Set<UUID> secondRoundCorrectGuessers = new HashSet<>();
     private int secondRoundCallTaskId = -1;
     private boolean thirdRoundActive = false;
@@ -172,6 +209,35 @@ public class SixRooms extends JavaPlugin implements Listener {
     private final Map<Location, Material> doorRoundReplacedBlocks = new HashMap<>();
     private final List<UUID> doorRoundHolograms = new ArrayList<>();
     private int doorsRoundTaskId = -1;
+    private boolean voteRoundActive = false;
+    private int voteRoundTaskId = -1;
+    private final Map<UUID, UUID> voteChoices = new HashMap<>();
+    private boolean rouletteRoundActive = false;
+    private int rouletteChambers = 0;
+    private int rouletteBulletIndex = -1;
+    private int rouletteCurrentIndex = 0;
+    private int rouletteHolderIndex = 0;
+    private int rouletteAutoTaskId = -1;
+    private final List<UUID> rouletteOrder = new ArrayList<>();
+    private boolean memoryRoundActive = false;
+    private int memoryStudyTaskId = -1;
+    private int memoryTurnTaskId = -1;
+    private int memoryTurnIndex = 0;
+    private UUID memoryCurrentPlayerId;
+    private int memoryWordIndex = 0;
+    private final List<String> memoryWordSequence = new ArrayList<>();
+    private final List<String> memorySpokenWords = new ArrayList<>();
+    private final List<UUID> memoryOrder = new ArrayList<>();
+    private boolean bankRoundActive = false;
+    private int bankPoints = 0;
+    private int bankCallTaskId = -1;
+    private int bankTurnTaskId = -1;
+    private int bankTurnIndex = 0;
+    private UUID bankCurrentPlayerId;
+    private final List<UUID> bankOrder = new ArrayList<>();
+    private boolean excludeRoundActive = false;
+    private int excludeRoundTaskId = -1;
+    private final Map<UUID, UUID> excludeChoices = new HashMap<>();
     private final List<MaskDefinition> maskDefinitions = List.of(
         new MaskDefinition("Клоун", CLOWN_HEAD_BASE64),
         new MaskDefinition("Пепе", PEPE_HEAD_BASE64),
@@ -208,18 +274,7 @@ public class SixRooms extends JavaPlugin implements Listener {
     }
 
     private void loadTranslations() {
-        File file = new File(getDataFolder(), "lang.yml");
-        if (!file.exists()) {
-            saveResource("lang.yml", false);
-        }
-        translations = YamlConfiguration.loadConfiguration(file);
-        if (getResource("lang.yml") != null) {
-            YamlConfiguration defaults = YamlConfiguration.loadConfiguration(
-                new InputStreamReader(Objects.requireNonNull(getResource("lang.yml")), StandardCharsets.UTF_8)
-            );
-            translations.setDefaults(defaults);
-            translations.options().copyDefaults(true);
-        }
+        translations = null;
     }
 
     private String tr(String text, Object... args) {
@@ -240,14 +295,20 @@ public class SixRooms extends JavaPlugin implements Listener {
     public void onEnable() {
         getDataFolder().mkdirs();
         saveDefaultConfig();
-        loadTranslations();
+        translations = null;
         language = getConfig().getString("language", "ru").toLowerCase(Locale.ROOT);
         phoneItemKey = new NamespacedKey(this, "phone_item");
         phoneBlockKey = new NamespacedKey(this, "phone_block");
         phoneTargetKey = new NamespacedKey(this, "phone_target");
         phoneResetKey = new NamespacedKey(this, "phone_reset");
+        voteBookKey = new NamespacedKey(this, "vote_book");
+        maskBookKey = new NamespacedKey(this, "mask_book");
+        revolverItemKey = new NamespacedKey(this, "revolver_item");
+        rouletteAmmoKey = new NamespacedKey(this, "roulette_ammo");
+        memoryBookKey = new NamespacedKey(this, "memory_book");
+        excludeBookKey = new NamespacedKey(this, "exclude_book");
         fixedRoundSlots.clear();
-        fixedRoundSlots.put(4, RoundType.FOURTH);
+        fixedRoundSlots.put(4, List.of(RoundType.FOURTH));
         Bukkit.getPluginManager().registerEvents(this, this);
         if (getCommand("sixrooms") != null) {
             getCommand("sixrooms").setTabCompleter(this);
@@ -271,6 +332,8 @@ public class SixRooms extends JavaPlugin implements Listener {
             }
             completions.add("join");
             completions.add("leave");
+            completions.add("vote");
+            completions.add("exclude");
             
             String input = args[0].toLowerCase();
             List<String> result = new ArrayList<>();
@@ -281,18 +344,53 @@ public class SixRooms extends JavaPlugin implements Listener {
             }
             return result;
         }
+        if (args.length == 2 && sender.hasPermission(ADMIN_PERMISSION)) {
+            if ("debug".equalsIgnoreCase(args[0])) {
+                List<String> options = List.of("start", "skip");
+                String input = args[1].toLowerCase();
+                List<String> result = new ArrayList<>();
+                for (String option : options) {
+                    if (option.startsWith(input)) {
+                        result.add(option);
+                    }
+                }
+                return result;
+            }
+        }
+        if (args.length == 3 && sender.hasPermission(ADMIN_PERMISSION)) {
+            if ("debug".equalsIgnoreCase(args[0]) && ("start".equalsIgnoreCase(args[1]) || "skip".equalsIgnoreCase(args[1]))) {
+                List<String> options = List.of("1","2","3","4","5","6","7","8","9","10");
+                String input = args[2].toLowerCase();
+                List<String> result = new ArrayList<>();
+                for (String option : options) {
+                    if (option.startsWith(input)) {
+                        result.add(option);
+                    }
+                }
+                return result;
+            }
+        }
         return null;
     }
 
     @Override
     public void onDisable() {
         endAllCalls(null);
+        stopRegenTask();
         stopFirstRoundPreparation();
         stopFirstRound();
         stopSecondRound();
         stopThirdRound();
         stopFourthRound();
         stopFifthRound();
+        stopSixthRound();
+        stopSeventhRound();
+        returnPlayersToSavedLocations();
+        clearSchematicRooms();
+        stopEighthRound();
+        stopNinthRound();
+        stopTenthRound();
+        restoreInventoriesForOnline();
         participants.clear();
         playerNumbers.clear();
         scores.clear();
@@ -335,7 +433,16 @@ public class SixRooms extends JavaPlugin implements Listener {
                 handlePhone(sender);
                 return true;
             case "debug":
-                handleDebug(sender);
+                handleDebug(sender, args);
+                return true;
+            case "vote":
+                handleVote(sender, args);
+                return true;
+            case "mask":
+                handleMask(sender, args);
+                return true;
+            case "exclude":
+                handleExclude(sender, args);
                 return true;
             default:
                 sendUsage(sender);
@@ -360,7 +467,7 @@ public class SixRooms extends JavaPlugin implements Listener {
         playerNumbers.clear();
         baseLocation = ((Player) sender).getLocation();
         state = GameState.REGISTRATION;
-        sender.sendMessage(tr("§aРегистрация открыта! §7Используйте §e/sixrooms join §7для входа."));
+        Bukkit.broadcastMessage(tr("§aРегистрация открыта! §7Используйте §e/sixrooms join §7для входа."));
     }
 
     private void handleJoin(CommandSender sender) {
@@ -418,7 +525,7 @@ public class SixRooms extends JavaPlugin implements Listener {
             sender.sendMessage(tr("§cРегистрация не активна."));
             return;
         }
-        int minPlayers = debug ? 2 : MIN_PLAYERS;
+        int minPlayers = debug ? 1 : MIN_PLAYERS;
         if (participants.size() < minPlayers) {
             sender.sendMessage(tr("§cНедостаточно игроков для старта (минимум %d).", minPlayers));
             return;
@@ -433,17 +540,28 @@ public class SixRooms extends JavaPlugin implements Listener {
         stopThirdRound();
         stopFourthRound();
         stopFifthRound();
+        stopSixthRound();
         scores.clear();
         firstRoundChoices.clear();
         currentRound = 0;
+        nextRoundType = null;
         roomCenters.clear();
+        savedLocations.clear();
+        schematicRegions.clear();
         remainingRoundPool.clear();
         remainingRoundPool.addAll(roundPool);
         Collections.shuffle(remainingRoundPool, random);
-        File schematic = new File(getDataFolder(), SCHEMATIC_NAME);
-        boolean useSchematic = schematic.exists();
+        World world = baseLocation.getWorld();
+        if (world == null) {
+            sender.sendMessage(tr("§cМир недоступен."));
+            return;
+        }
+        File schematic = findSchematicFile();
+        boolean useSchematic = schematic != null;
         usingSchematicRooms = useSchematic;
         Clipboard clipboard = null;
+        List<BlockVector3> spawnOffsets = new ArrayList<>();
+        int schematicPasteY = baseLocation.getBlockY();
 
         if (useSchematic) {
             if (!isWorldEditAvailable()) {
@@ -456,18 +574,19 @@ public class SixRooms extends JavaPlugin implements Listener {
                     return;
                 }
                 clipboard = reader.read();
+                spawnOffsets = findSchematicSpawnOffsets(clipboard);
+                schematicPasteY = getSchematicPasteY(world, clipboard, baseLocation.getBlockY());
+                sender.sendMessage(tr("§eСхематика выбрана: §a%s", schematic.getName()));
             } catch (IOException e) {
                 sender.sendMessage(tr("§cОшибка чтения схематики."));
                 return;
             }
         } else {
-            sender.sendMessage(tr("§eСхематика не найдена. Будет использована процедурная генерация."));
-        }
-
-        World world = baseLocation.getWorld();
-        if (world == null) {
-            sender.sendMessage(tr("§cМир недоступен."));
-            return;
+            if (hasSchematicLikeFiles()) {
+                sender.sendMessage(tr("§cФормат схематики не поддерживается WorldEdit."));
+            } else {
+                sender.sendMessage(tr("§eСхематика не найдена. Будет использована процедурная генерация."));
+            }
         }
 
         List<Player> players = new ArrayList<>();
@@ -482,39 +601,69 @@ public class SixRooms extends JavaPlugin implements Listener {
             return;
         }
 
+        for (Player player : players) {
+            savedLocations.put(player.getUniqueId(), player.getLocation());
+        }
+        for (Player player : players) {
+            saveAndClearInventory(player);
+        }
+
         playerNumbers.clear();
         int totalPlayers = players.size();
-        for (int i = 0; i < totalPlayers; i++) {
-            int number = i + 1;
-            BlockVector3 pasteTo = BlockVector3.at(
-                baseLocation.getBlockX() + (i * ROOM_SPACING),
-                baseLocation.getBlockY(),
-                baseLocation.getBlockZ()
-            );
-            
-            if (useSchematic) {
-                if (!pasteSchematic(clipboard, world, pasteTo)) {
-                    sender.sendMessage(tr("§cОшибка при вставке схематики."));
-                    return;
-                }
-            } else {
-                generateProceduralRoom(world, pasteTo);
+        if (useSchematic) {
+            if (clipboard == null) {
+                sender.sendMessage(tr("§cНе удалось прочитать схематику."));
+                return;
             }
-
-            Location teleportTo = new Location(
-                world,
-                pasteTo.x() + 0.5 + (useSchematic ? 0 : 4), // Center in 8x8 room
-                pasteTo.y() + 1,
-                pasteTo.z() + 0.5 + (useSchematic ? 0 : 4)
-            );
-            Player player = players.get(i);
-            player.teleport(teleportTo);
-            playerNumbers.put(player.getUniqueId(), number);
-            roomCenters.put(player.getUniqueId(), teleportTo);
-            player.sendMessage(tr("§aТвой номер: §e%d §aиз §e%d", number, totalPlayers));
+            List<BlockVector3> sortedOffsets = new ArrayList<>(spawnOffsets);
+            if (sortedOffsets.isEmpty()) {
+                sender.sendMessage(tr("§cВ схематике нет маркеров спавна."));
+                return;
+            }
+            sortedOffsets.sort(Comparator.comparingInt(BlockVector3::x)
+                .thenComparingInt(BlockVector3::z)
+                .thenComparingInt(BlockVector3::y));
+            if (sortedOffsets.size() < totalPlayers) {
+                sender.sendMessage(tr("§cНедостаточно маркеров спавна (%d/%d).", sortedOffsets.size(), totalPlayers));
+                return;
+            }
+            BlockVector3 pasteTo = BlockVector3.at(baseLocation.getBlockX(), schematicPasteY, baseLocation.getBlockZ());
+            if (!pasteSchematic(clipboard, world, pasteTo)) {
+                sender.sendMessage(tr("§cОшибка при вставке схематики."));
+                return;
+            }
+            schematicRegions.add(getPastedRegion(clipboard, world, pasteTo));
+            markPhoneBlocks(clipboard, world, pasteTo);
+            for (int i = 0; i < totalPlayers; i++) {
+                int number = i + 1;
+                BlockVector3 spawnBlock = pasteTo.add(sortedOffsets.get(i));
+                Location teleportTo = new Location(world, spawnBlock.x() + 0.5, spawnBlock.y() + 0.01, spawnBlock.z() + 0.5);
+                Player player = players.get(i);
+                player.teleport(teleportTo);
+                playerNumbers.put(player.getUniqueId(), number);
+                roomCenters.put(player.getUniqueId(), teleportTo);
+                player.sendMessage(tr("§aТвой номер: §e%d §aиз §e%d", number, totalPlayers));
+            }
+        } else {
+            for (int i = 0; i < totalPlayers; i++) {
+                int number = i + 1;
+                BlockVector3 pasteTo = BlockVector3.at(
+                    baseLocation.getBlockX() + (i * ROOM_SPACING),
+                    baseLocation.getBlockY(),
+                    baseLocation.getBlockZ()
+                );
+                generateProceduralRoom(world, pasteTo);
+                Location teleportTo = new Location(world, pasteTo.x() + 4.5, pasteTo.y() + 1, pasteTo.z() + 4.5);
+                Player player = players.get(i);
+                player.teleport(teleportTo);
+                playerNumbers.put(player.getUniqueId(), number);
+                roomCenters.put(player.getUniqueId(), teleportTo);
+                player.sendMessage(tr("§aТвой номер: §e%d §aиз §e%d", number, totalPlayers));
+            }
         }
 
         state = GameState.RUNNING;
+        startRegenTask();
 
         // Create private groups for each player
         for (UUID playerId : playerNumbers.keySet()) {
@@ -594,12 +743,15 @@ public class SixRooms extends JavaPlugin implements Listener {
         }
         
         endAllCalls(tr("§eИгра отменена."));
+        stopRegenTask();
         stopFirstRoundPreparation();
         stopFirstRound();
         stopSecondRound();
         stopThirdRound();
         stopFourthRound();
         stopFifthRound();
+        stopSixthRound();
+        stopSeventhRound();
         
         // Cleanup groups for all participants
         for (UUID playerId : playerNumbers.keySet()) {
@@ -609,6 +761,8 @@ public class SixRooms extends JavaPlugin implements Listener {
                 p.sendMessage(tr("§eПриватный канал связи отключен."));
             }
         }
+
+        restoreInventoriesForOnline();
         
         participants.clear();
         playerNumbers.clear();
@@ -619,7 +773,8 @@ public class SixRooms extends JavaPlugin implements Listener {
     }
 
     private void startFirstRoundPreparation(List<Player> players) {
-        startRoundPreparation(players, FIRST_ROUND_PREP_SECONDS, tr("§eДо начала первого раунда: §a"), this::startNextRound);
+        RoundType nextRound = getNextRoundType();
+        startRoundPreparation(players, FIRST_ROUND_PREP_SECONDS, tr("§eДо начала раунда: §a"), this::startNextRound, nextRound);
     }
 
     private void stopFirstRoundPreparation() {
@@ -631,15 +786,18 @@ public class SixRooms extends JavaPlugin implements Listener {
             roundPrepBar.removeAll();
             roundPrepBar = null;
         }
+        nextRoundType = null;
     }
 
-    private void startRoundPreparation(List<Player> players, int totalSeconds, String titlePrefix, Runnable onComplete) {
+    private void startRoundPreparation(List<Player> players, int totalSeconds, String titlePrefix, Runnable onComplete, RoundType upcomingRound) {
         stopFirstRoundPreparation();
+        nextRoundType = upcomingRound;
         roundPrepBar = Bukkit.createBossBar(titlePrefix + formatTime(totalSeconds), BarColor.YELLOW, BarStyle.SOLID);
         roundPrepBar.setProgress(1.0);
         for (Player player : players) {
             roundPrepBar.addPlayer(player);
         }
+        sendRoundRules(players, upcomingRound);
         final int[] remaining = {totalSeconds};
         roundPrepTaskId = Bukkit.getScheduler().runTaskTimer(this, () -> {
             int secondsLeft = remaining[0]--;
@@ -655,10 +813,152 @@ public class SixRooms extends JavaPlugin implements Listener {
         }, 0L, 20L).getTaskId();
     }
 
+    private void sendRoundRules(List<Player> players, RoundType roundType) {
+        if (players == null || players.isEmpty() || roundType == null) {
+            return;
+        }
+        List<String> rules = getRoundRules(roundType, players.size());
+        if (rules.isEmpty()) {
+            return;
+        }
+        int nextNumber = currentRound + 1;
+        String title = tr("§6§lРаунд %d: §e%s", nextNumber, getRoundTitle(roundType));
+        for (Player player : players) {
+            player.sendMessage(title);
+            for (String line : rules) {
+                player.sendMessage(line);
+            }
+        }
+    }
+
+    private List<String> getRoundRules(RoundType roundType, int playerCount) {
+        List<String> rules = new ArrayList<>();
+        if (roundType == RoundType.FIRST) {
+            rules.add(tr("§eПравила: §7Все кроме одного в одинаковых масках."));
+            rules.add(tr("§7Найти игрока чья маска отлитчаеться от остальных."));
+            rules.add(tr("§7Выбор через книгу или чат, можно менять."));
+            rules.add(tr("§7За правильный выбор +1 балл."));
+            return rules;
+        }
+        if (roundType == RoundType.SECOND) {
+            rules.add(tr("§eПравила: §7Одному из игроков дают секретное слово."));
+            rules.add(tr("§7Он звонит и передаёт слово по цепочке."));
+            rules.add(tr("§7Время разговора: §a%d §7сек.", SECOND_ROUND_CALL_SECONDS));
+            rules.add(tr("§7Нельзя звонить тому, кто только что звонил тебе."));
+            rules.add(tr("§7Раунд заканчивается, когда каждый получил звонок."));
+            rules.add(tr("§7После звонков напиши догадку в чат."));
+            rules.add(tr("§7Владелец слова и угадавшие получают +1 балл."));
+            return rules;
+        }
+        if (roundType == RoundType.THIRD) {
+            rules.add(tr("§eПравила: §7Динамит взорвёться через время, которое никто не знает."));
+            rules.add(tr("§7Передавай динамит через GUI телефона, но не назад отправителю."));
+            rules.add(tr("§7Передача доступна через §a%d §7секунд после получения.", TNT_TRANSFER_LOCK_SECONDS));
+            if (TNT_FUSE_MAX_SECONDS > TNT_FUSE_MIN_SECONDS) {
+                rules.add(tr("§7Взрыв через §a%d–%d §7секунд после старта.", TNT_FUSE_MIN_SECONDS, TNT_FUSE_MAX_SECONDS));
+            } else {
+                rules.add(tr("§7Взрыв через §a%d §7секунд после старта.", TNT_FUSE_MIN_SECONDS));
+            }
+            rules.add(tr("§7Раунд закониться когда взорвётся динамит."));
+            return rules;
+        }
+        if (roundType == RoundType.FOURTH) {
+            rules.add(tr("§eПравила: §7Один из игроков получает меч. Владелец меча выбирает цель в телефоне."));
+            rules.add(tr("§7На выбор цели: §a%d §7сек.", SWORD_CHOICE_SECONDS));
+            rules.add(tr("§7Он телепортируется к цели на разговор (§a%d §7сек).", SWORD_VISIT_SECONDS));
+            rules.add(tr("§7По итогам выбора владелец меча +1, цель -1."));
+            rules.add(tr("§7Если цель не выбрана, выбирается случайно. Отказаться от выбора нельзя"));
+            return rules;
+        }
+        if (roundType == RoundType.FIFTH) {
+            rules.add(tr("§eПравила: §7Выбор — выйти или остаться."));
+            rules.add(tr("§7У вас есть время на обсуждаение."));
+            rules.add(tr("§7Нечётное число открывших: +1 тем, кто открыл дверь."));
+            rules.add(tr("§7Чётное число открывших: -1."));
+            return rules;
+        }
+        if (roundType == RoundType.SIXTH) {
+            rules.add(tr("§eПравила: §7Тайно голосуй против игрока."));
+            rules.add(tr("§7Игрок с большим количесвом голосов теряет 1 балл."));
+            rules.add(tr("§7Голосовавшие за наказанного получают 1 балл."));
+            rules.add(tr("§7Выбор можно менять до конца раунда."));
+            return rules;
+        }
+        if (roundType == RoundType.SEVENTH) {
+            rules.add(tr("§eПравила: §7Револьвер идёт по кругу."));
+            rules.add(tr("§7На выстрел: §a%d §7сек.", ROULETTE_TIMEOUT_SECONDS));
+            rules.add(tr("§7Отказаться от выстрела нельзя."));
+            rules.add(tr("§7Холостой патрон даёт +1 и ход дальше."));
+            rules.add(tr("§7Боевой патрон даёт -1 и завершает раунд."));
+            return rules;
+        }
+        if (roundType == RoundType.EIGHTH) {
+            rules.add(tr("§eПравила: §7Запомни слова за §a%d §7секунд.", MEMORY_STUDY_SECONDS));
+            rules.add(tr("§7Дальше по очереди называйте следующее слово в чат (сохраняя изначальный порядок)."));
+            rules.add(tr("§7Время на ход: §a%d §7секунд.", MEMORY_TURN_SECONDS));
+            rules.add(tr("§7Ошибка или тайм-аут — выбываешь."));
+            rules.add(tr("§7Последние два игрока получают 1 балл."));
+            return rules;
+        }
+        if (roundType == RoundType.NINTH) {
+            int callSeconds = getDynamicSeconds(BANK_CALL_SECONDS, playerCount);
+            int turnSeconds = getDynamicSeconds(BANK_TURN_SECONDS, playerCount);
+            rules.add(tr("§eПравила: §7У вас есть §a%d §7секунд на обсуждение и банк с баллами.", callSeconds));
+            rules.add(tr("§7Далее каждый по очереди берёт из банка столько, сколько захочет."));
+            rules.add(tr("§7Время на выбор: §a%d §7секунд.", turnSeconds));
+            rules.add(tr("§7Взятые очки добавляются сразу."));
+            rules.add(tr("§7Если не успеешь сделать выбор — берёшь 0."));
+            return rules;
+        }
+        if (roundType == RoundType.TENTH) {
+            rules.add(tr("§eПравила: §7Выбери игрока, которого хочешь лишить награды."));
+            rules.add(tr("§7Можно никого не выбирать."));
+            rules.add(tr("§7Игроки с большим количеством голосов не получают баллы."));
+            rules.add(tr("§7Все остальные получают +1."));
+            return rules;
+        }
+        return rules;
+    }
+
+    private String getRoundTitle(RoundType roundType) {
+        if (roundType == RoundType.FIRST) {
+            return tr("Маски");
+        }
+        if (roundType == RoundType.SECOND) {
+            return tr("Цепочка слов");
+        }
+        if (roundType == RoundType.THIRD) {
+            return tr("Динамит");
+        }
+        if (roundType == RoundType.FOURTH) {
+            return tr("Меч");
+        }
+        if (roundType == RoundType.FIFTH) {
+            return tr("Двери");
+        }
+        if (roundType == RoundType.SIXTH) {
+            return tr("Голосование");
+        }
+        if (roundType == RoundType.SEVENTH) {
+            return tr("Русская рулетка");
+        }
+        if (roundType == RoundType.EIGHTH) {
+            return tr("Память");
+        }
+        if (roundType == RoundType.NINTH) {
+            return tr("Банк");
+        }
+        if (roundType == RoundType.TENTH) {
+            return tr("Исключение");
+        }
+        return tr("Раунд");
+    }
+
     private RoundType getNextRoundType() {
         int nextIndex = currentRound + 1;
-        RoundType fixed = fixedRoundSlots.get(nextIndex);
-        if (fixed != null) {
+        List<RoundType> fixedOptions = fixedRoundSlots.get(nextIndex);
+        if (fixedOptions != null && !fixedOptions.isEmpty()) {
+            RoundType fixed = fixedOptions.get(random.nextInt(fixedOptions.size()));
             remainingRoundPool.remove(fixed);
             return fixed;
         }
@@ -677,7 +977,8 @@ public class SixRooms extends JavaPlugin implements Listener {
             finishGame(tr("§eИгра окончена."));
             return;
         }
-        RoundType nextRound = getNextRoundType();
+        RoundType nextRound = nextRoundType != null ? nextRoundType : getNextRoundType();
+        nextRoundType = null;
         currentRound++;
         currentRoundType = nextRound;
         if (nextRound == RoundType.FIRST) {
@@ -690,6 +991,16 @@ public class SixRooms extends JavaPlugin implements Listener {
             startFourthRound();
         } else if (nextRound == RoundType.FIFTH) {
             startFifthRound();
+        } else if (nextRound == RoundType.SIXTH) {
+            startSixthRound();
+        } else if (nextRound == RoundType.SEVENTH) {
+            startSeventhRound();
+        } else if (nextRound == RoundType.EIGHTH) {
+            startEighthRound();
+        } else if (nextRound == RoundType.NINTH) {
+            startNinthRound();
+        } else if (nextRound == RoundType.TENTH) {
+            startTenthRound();
         }
     }
 
@@ -699,12 +1010,22 @@ public class SixRooms extends JavaPlugin implements Listener {
         return String.format("%d:%02d", minutes, secs);
     }
 
+    private int getDynamicSeconds(int baseSeconds, int playerCount) {
+        int extraPlayers = Math.max(0, playerCount - MIN_PLAYERS);
+        return baseSeconds + ROUND_MIN_EXTRA_SECONDS + extraPlayers * ROUND_EXTRA_SECONDS_PER_PLAYER;
+    }
+
     private void startFirstRound() {
         stopFirstRound();
         stopSecondRound();
         stopThirdRound();
         stopFourthRound();
         stopFifthRound();
+        stopSixthRound();
+        stopSeventhRound();
+        stopEighthRound();
+        stopNinthRound();
+        stopTenthRound();
         firstRoundActive = true;
         firstRoundChoices.clear();
         previousHelmets.clear();
@@ -729,11 +1050,13 @@ public class SixRooms extends JavaPlugin implements Listener {
         for (Player player : players) {
             player.sendMessage(tr("§6§lРаунд %d", currentRound));
             player.sendMessage(tr("§eОпредели, у кого маска отличается от остальных."));
-            player.sendMessage(tr("§eНапиши в чат ник или номер игрока."));
+            player.sendMessage(tr("§7Открой книгу и кликни по имени, или напиши ник/номер в чат."));
             player.sendMessage(tr("§7Сообщение увидишь только ты. Выбор можно менять."));
+            updateMaskBook(player, false);
         }
-        startRoundBar(players, FIRST_ROUND_SECONDS);
-        firstRoundTaskId = Bukkit.getScheduler().runTaskLater(this, this::endFirstRound, FIRST_ROUND_SECONDS * 20L).getTaskId();
+        int roundSeconds = getDynamicSeconds(FIRST_ROUND_SECONDS, players.size());
+        startRoundBar(players, roundSeconds);
+        firstRoundTaskId = Bukkit.getScheduler().runTaskLater(this, this::endFirstRound, roundSeconds * 20L).getTaskId();
     }
 
     private void endFirstRound() {
@@ -748,7 +1071,7 @@ public class SixRooms extends JavaPlugin implements Listener {
         }
         for (Map.Entry<UUID, UUID> entry : firstRoundChoices.entrySet()) {
             if (clownPlayerId != null && clownPlayerId.equals(entry.getValue())) {
-                scores.put(entry.getKey(), scores.getOrDefault(entry.getKey(), 0) + 1);
+                applyScore(entry.getKey(), 1, false);
             }
         }
         for (UUID playerId : previousHelmets.keySet()) {
@@ -763,18 +1086,10 @@ public class SixRooms extends JavaPlugin implements Listener {
             return;
         }
         List<Player> players = getOnlineParticipants();
-        for (Player player : players) {
-            player.sendMessage(tr("§eРаунд закончен. §7Подготовка 30 секунд."));
-        }
-        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound);
-        if (debug) {
-            for (UUID playerId : playerNumbers.keySet()) {
-                Player player = Bukkit.getPlayer(playerId);
-                if (player != null && player.isOnline()) {
-                    player.sendMessage(tr("§eБаллы: §a%d", scores.getOrDefault(playerId, 0)));
-                }
-            }
-        }
+        notifyRoundEnd(players);
+        RoundType nextRound = getNextRoundType();
+        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound, nextRound);
+        sendDebugScores();
         stopSecondRound();
     }
 
@@ -793,6 +1108,9 @@ public class SixRooms extends JavaPlugin implements Listener {
         }
         previousHelmets.clear();
         clownPlayerId = null;
+        for (Player player : getOnlineParticipants()) {
+            removeMaskBooks(player);
+        }
         firstRoundChoices.clear();
     }
 
@@ -801,8 +1119,14 @@ public class SixRooms extends JavaPlugin implements Listener {
         stopThirdRound();
         stopFourthRound();
         stopFifthRound();
+        stopSixthRound();
+        stopSeventhRound();
+        stopEighthRound();
+        stopNinthRound();
+        stopTenthRound();
         secondRoundActive = true;
         secondRoundCalled.clear();
+        secondRoundLastCaller.clear();
         secondRoundCorrectGuessers.clear();
         secondRoundWord = null;
         secondRoundAwaitingWord = false;
@@ -813,7 +1137,6 @@ public class SixRooms extends JavaPlugin implements Listener {
         Player wordOwner = players.get(random.nextInt(players.size()));
         secondRoundWordOwner = wordOwner.getUniqueId();
         secondRoundCurrentCaller = wordOwner.getUniqueId();
-        secondRoundCalled.add(wordOwner.getUniqueId());
         boolean systemWord = random.nextBoolean();
         if (systemWord) {
             secondRoundWord = SECOND_ROUND_WORDS.get(random.nextInt(SECOND_ROUND_WORDS.size()));
@@ -827,10 +1150,8 @@ public class SixRooms extends JavaPlugin implements Listener {
             player.sendMessage(tr("§6§lРаунд %d", currentRound));
             player.sendMessage(tr("§eУгадай слово по цепочке звонков."));
             player.sendMessage(tr("§eЗвонить может только тот, у кого сейчас слово."));
-            player.sendMessage(tr("§7Время разговора 40 секунд. Пиши слово в чат."));
+            player.sendMessage(tr("§7Время разговора %d секунд. Пиши слово в чат.", SECOND_ROUND_CALL_SECONDS));
         }
-        int totalSeconds = Math.max(1, (players.size() - 1) * 40);
-        startRoundBar(players, totalSeconds);
     }
 
     private void endSecondRound() {
@@ -844,28 +1165,20 @@ public class SixRooms extends JavaPlugin implements Listener {
             secondRoundCallTaskId = -1;
         }
         if (secondRoundWordOwner != null) {
-            scores.put(secondRoundWordOwner, scores.getOrDefault(secondRoundWordOwner, 0) + 1);
+            applyScore(secondRoundWordOwner, 1, true);
         }
         for (UUID playerId : secondRoundCorrectGuessers) {
-            scores.put(playerId, scores.getOrDefault(playerId, 0) + 1);
+            applyScore(playerId, 1, true);
         }
         if (shouldFinishGame()) {
             finishGame(tr("§eИгра окончена."));
             return;
         }
         List<Player> players = getOnlineParticipants();
-        for (Player player : players) {
-            player.sendMessage(tr("§eРаунд закончен. §7Подготовка 30 секунд."));
-        }
-        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound);
-        if (debug) {
-            for (UUID playerId : playerNumbers.keySet()) {
-                Player player = Bukkit.getPlayer(playerId);
-                if (player != null && player.isOnline()) {
-                    player.sendMessage(tr("§eБаллы: §a%d", scores.getOrDefault(playerId, 0)));
-                }
-            }
-        }
+        notifyRoundEnd(players);
+        RoundType nextRound = getNextRoundType();
+        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound, nextRound);
+        sendDebugScores();
     }
 
     private void stopSecondRound() {
@@ -875,6 +1188,7 @@ public class SixRooms extends JavaPlugin implements Listener {
         secondRoundWordOwner = null;
         secondRoundCurrentCaller = null;
         secondRoundCalled.clear();
+        secondRoundLastCaller.clear();
         secondRoundCorrectGuessers.clear();
         if (secondRoundCallTaskId != -1) {
             Bukkit.getScheduler().cancelTask(secondRoundCallTaskId);
@@ -896,7 +1210,7 @@ public class SixRooms extends JavaPlugin implements Listener {
                     holder.sendMessage(tr("§eТеперь можно передавать динамит."));
                 }
             }
-        }, 5L * 20L).getTaskId();
+        }, TNT_TRANSFER_LOCK_SECONDS * 20L).getTaskId();
     }
 
     private Location getRoomCenter(Player player) {
@@ -947,6 +1261,11 @@ public class SixRooms extends JavaPlugin implements Listener {
         stopThirdRound();
         stopFourthRound();
         stopFifthRound();
+        stopSixthRound();
+        stopSeventhRound();
+        stopEighthRound();
+        stopNinthRound();
+        stopTenthRound();
         thirdRoundActive = true;
         List<Player> players = getOnlineParticipants();
         if (players.isEmpty()) {
@@ -956,7 +1275,7 @@ public class SixRooms extends JavaPlugin implements Listener {
         tntHolderId = holder.getUniqueId();
         tntLastHolderId = null;
         tntTransferAllowed = false;
-        tntFuseSeconds = 90 + random.nextInt(121);
+        tntFuseSeconds = TNT_FUSE_MIN_SECONDS + random.nextInt(TNT_FUSE_MAX_SECONDS - TNT_FUSE_MIN_SECONDS + 1);
         Location spawnLocation = getRoomCenter(holder);
         if (spawnLocation == null) {
             spawnLocation = holder.getLocation();
@@ -970,7 +1289,7 @@ public class SixRooms extends JavaPlugin implements Listener {
         for (Player player : players) {
             player.sendMessage(tr("§6§lРаунд %d", currentRound));
             player.sendMessage(tr("§eДинамит уже подожжён."));
-            player.sendMessage(tr("§eПередавать можно через 5 секунд."));
+            player.sendMessage(tr("§eПередавать можно через %d секунд.", TNT_TRANSFER_LOCK_SECONDS));
         }
         holder.sendMessage(tr("§cДинамит в твоей комнате."));
         scheduleTntTransferUnlock();
@@ -998,18 +1317,10 @@ public class SixRooms extends JavaPlugin implements Listener {
             return;
         }
         List<Player> players = getOnlineParticipants();
-        for (Player player : players) {
-            player.sendMessage(tr("§eРаунд закончен. §7Подготовка 30 секунд."));
-        }
-        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound);
-        if (debug) {
-            for (UUID playerId : playerNumbers.keySet()) {
-                Player player = Bukkit.getPlayer(playerId);
-                if (player != null && player.isOnline()) {
-                    player.sendMessage(tr("§eБаллы: §a%d", scores.getOrDefault(playerId, 0)));
-                }
-            }
-        }
+        notifyRoundEnd(players);
+        RoundType nextRound = getNextRoundType();
+        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound, nextRound);
+        sendDebugScores();
         stopThirdRound();
     }
 
@@ -1031,6 +1342,11 @@ public class SixRooms extends JavaPlugin implements Listener {
         stopSecondRound();
         stopThirdRound();
         stopFourthRound();
+        stopSixthRound();
+        stopSeventhRound();
+        stopEighthRound();
+        stopNinthRound();
+        stopTenthRound();
         fourthRoundActive = true;
         swordUsed = false;
         swordVisitActive = false;
@@ -1088,18 +1404,10 @@ public class SixRooms extends JavaPlugin implements Listener {
             return;
         }
         List<Player> players = getOnlineParticipants();
-        for (Player player : players) {
-            player.sendMessage(tr("§eРаунд закончен. §7Подготовка 30 секунд."));
-        }
-        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound);
-        if (debug) {
-            for (UUID playerId : playerNumbers.keySet()) {
-                Player player = Bukkit.getPlayer(playerId);
-                if (player != null && player.isOnline()) {
-                    player.sendMessage(tr("§eБаллы: §a%d", scores.getOrDefault(playerId, 0)));
-                }
-            }
-        }
+        notifyRoundEnd(players);
+        RoundType nextRound = getNextRoundType();
+        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound, nextRound);
+        sendDebugScores();
         stopFourthRound();
     }
 
@@ -1152,8 +1460,8 @@ public class SixRooms extends JavaPlugin implements Listener {
         holder.teleport(targetLocation);
         holder.sendMessage(tr("§eТы пришёл к игроку §a%s", target.getName()));
         target.sendMessage(tr("§eК тебе пришёл игрок §a%s", holder.getName()));
-        holder.sendMessage(tr("§eУ вас 60 секунд на разговор."));
-        target.sendMessage(tr("§eУ вас 60 секунд на разговор."));
+        holder.sendMessage(tr("§eУ вас %d секунд на разговор.", SWORD_VISIT_SECONDS));
+        target.sendMessage(tr("§eУ вас %d секунд на разговор.", SWORD_VISIT_SECONDS));
         startRoundBar(getOnlineParticipants(), SWORD_VISIT_SECONDS);
         if (swordVisitTaskId != -1) {
             Bukkit.getScheduler().cancelTask(swordVisitTaskId);
@@ -1170,8 +1478,11 @@ public class SixRooms extends JavaPlugin implements Listener {
             return;
         }
         swordUsed = true;
-        scores.put(holder.getUniqueId(), scores.getOrDefault(holder.getUniqueId(), 0) + 1);
-        scores.put(target.getUniqueId(), scores.getOrDefault(target.getUniqueId(), 0) - 1);
+        if (holder.isOnline()) {
+            holder.getInventory().setItemInMainHand(swordPreviousItem);
+        }
+        applyScore(holder.getUniqueId(), 1, true);
+        applyScore(target.getUniqueId(), -1, true);
         List<Player> players = getOnlineParticipants();
         for (Player player : players) {
             player.sendMessage(tr("§eИгрок §a%s §eударил игрока §a%s", holder.getName(), target.getName()));
@@ -1211,6 +1522,11 @@ public class SixRooms extends JavaPlugin implements Listener {
         stopThirdRound();
         stopFourthRound();
         stopFifthRound();
+        stopSixthRound();
+        stopSeventhRound();
+        stopEighthRound();
+        stopNinthRound();
+        stopTenthRound();
         doorsRoundActive = true;
         doorsRoundChoices.clear();
         List<Player> players = getOnlineParticipants();
@@ -1229,11 +1545,12 @@ public class SixRooms extends JavaPlugin implements Listener {
                 }
             }
         }
-        startRoundBar(players, DOORS_ROUND_SECONDS);
+        int roundSeconds = getDynamicSeconds(DOORS_ROUND_SECONDS, players.size());
+        startRoundBar(players, roundSeconds);
         if (doorsRoundTaskId != -1) {
             Bukkit.getScheduler().cancelTask(doorsRoundTaskId);
         }
-        doorsRoundTaskId = Bukkit.getScheduler().runTaskLater(this, this::endFifthRound, DOORS_ROUND_SECONDS * 20L).getTaskId();
+        doorsRoundTaskId = Bukkit.getScheduler().runTaskLater(this, this::endFifthRound, roundSeconds * 20L).getTaskId();
     }
 
     private void endFifthRound() {
@@ -1252,7 +1569,7 @@ public class SixRooms extends JavaPlugin implements Listener {
         for (UUID playerId : playerNumbers.keySet()) {
             if (Boolean.TRUE.equals(doorsRoundChoices.get(playerId))) {
                 int delta = odd ? 1 : -1;
-                scores.put(playerId, scores.getOrDefault(playerId, 0) + delta);
+                applyScore(playerId, delta, true);
             }
         }
         List<Player> players = getOnlineParticipants();
@@ -1266,18 +1583,10 @@ public class SixRooms extends JavaPlugin implements Listener {
             finishGame(tr("§eИгра окончена."));
             return;
         }
-        for (Player player : players) {
-            player.sendMessage(tr("§eРаунд закончен. §7Подготовка 30 секунд."));
-        }
-        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound);
-        if (debug) {
-            for (UUID playerId : playerNumbers.keySet()) {
-                Player player = Bukkit.getPlayer(playerId);
-                if (player != null && player.isOnline()) {
-                    player.sendMessage(tr("§eБаллы: §a%d", scores.getOrDefault(playerId, 0)));
-                }
-            }
-        }
+        notifyRoundEnd(players);
+        RoundType nextRound = getNextRoundType();
+        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound, nextRound);
+        sendDebugScores();
         stopFifthRound();
     }
 
@@ -1303,6 +1612,1021 @@ public class SixRooms extends JavaPlugin implements Listener {
         doorRoundReplacedBlocks.clear();
         doorOpenPlateLocations.clear();
         doorStayPlateLocations.clear();
+    }
+
+    private void startSixthRound() {
+        stopFirstRound();
+        stopSecondRound();
+        stopThirdRound();
+        stopFourthRound();
+        stopFifthRound();
+        stopSixthRound();
+        stopSeventhRound();
+        stopEighthRound();
+        stopNinthRound();
+        stopTenthRound();
+        voteRoundActive = true;
+        voteChoices.clear();
+        List<Player> players = getOnlineParticipants();
+        if (players.isEmpty()) {
+            return;
+        }
+        for (Player player : players) {
+            player.sendMessage(tr("§6§lРаунд %d", currentRound));
+            player.sendMessage(tr("§eГолосование против игрока."));
+            player.sendMessage(tr("§eВыбери, кто мешает победить."));
+            player.sendMessage(tr("§7Выбор тайный. Можно менять до конца раунда."));
+            player.sendMessage(tr("§7Открой книгу и кликни по имени, или напиши ник/номер в чат."));
+            giveItemToActiveSlot(player, createVoteBook(player));
+        }
+        int roundSeconds = getDynamicSeconds(VOTE_ROUND_SECONDS, players.size());
+        startRoundBar(players, roundSeconds);
+        if (voteRoundTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(voteRoundTaskId);
+        }
+        voteRoundTaskId = Bukkit.getScheduler().runTaskLater(this, this::endSixthRound, roundSeconds * 20L).getTaskId();
+    }
+
+    private void endSixthRound() {
+        if (!voteRoundActive) {
+            return;
+        }
+        voteRoundActive = false;
+        stopRoundBar();
+        if (voteRoundTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(voteRoundTaskId);
+            voteRoundTaskId = -1;
+        }
+        Map<UUID, Integer> voteCounts = new HashMap<>();
+        for (Map.Entry<UUID, UUID> entry : voteChoices.entrySet()) {
+            UUID targetId = entry.getValue();
+            if (targetId == null) {
+                continue;
+            }
+            voteCounts.put(targetId, voteCounts.getOrDefault(targetId, 0) + 1);
+        }
+        int maxVotes = 0;
+        for (int count : voteCounts.values()) {
+            if (count > maxVotes) {
+                maxVotes = count;
+            }
+        }
+        Set<UUID> leaders = new HashSet<>();
+        if (maxVotes > 0) {
+            for (Map.Entry<UUID, Integer> entry : voteCounts.entrySet()) {
+                if (entry.getValue() == maxVotes) {
+                    leaders.add(entry.getKey());
+                }
+            }
+        }
+        for (UUID leaderId : leaders) {
+            applyScore(leaderId, -1, false);
+        }
+        for (Map.Entry<UUID, UUID> entry : voteChoices.entrySet()) {
+            if (leaders.contains(entry.getValue())) {
+                UUID voterId = entry.getKey();
+                applyScore(voterId, 1, false);
+            }
+        }
+        List<Player> players = getOnlineParticipants();
+        if (leaders.isEmpty()) {
+            for (Player player : players) {
+                player.sendMessage(tr("§eГолоса не были отданы."));
+            }
+        } else {
+            String leadersText = formatPlayerList(leaders);
+            for (Player player : players) {
+                player.sendMessage(tr("§eНаказание получают: §c%s", leadersText));
+            }
+        }
+        for (UUID voterId : voteChoices.keySet()) {
+            if (!leaders.contains(voteChoices.get(voterId))) {
+                continue;
+            }
+            Player voter = Bukkit.getPlayer(voterId);
+            if (voter != null && voter.isOnline()) {
+                voter.sendMessage(tr("§aВы получили +1 за голос."));
+            }
+        }
+        for (UUID leaderId : leaders) {
+            Player leader = Bukkit.getPlayer(leaderId);
+            if (leader != null && leader.isOnline()) {
+                leader.sendMessage(tr("§cВы получили -1 по итогам голосования."));
+            }
+        }
+        if (shouldFinishGame()) {
+            finishGame(tr("§eИгра окончена."));
+            return;
+        }
+        notifyRoundEnd(players);
+        RoundType nextRound = getNextRoundType();
+        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound, nextRound);
+        sendDebugScores();
+        stopSixthRound();
+    }
+
+    private void stopSixthRound() {
+        voteRoundActive = false;
+        voteChoices.clear();
+        if (voteRoundTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(voteRoundTaskId);
+            voteRoundTaskId = -1;
+        }
+        for (Player player : getOnlineParticipants()) {
+            removeVoteBooks(player);
+        }
+    }
+
+    private void startSeventhRound() {
+        stopFirstRound();
+        stopSecondRound();
+        stopThirdRound();
+        stopFourthRound();
+        stopFifthRound();
+        stopSixthRound();
+        stopSeventhRound();
+        stopEighthRound();
+        stopNinthRound();
+        stopTenthRound();
+        rouletteRoundActive = true;
+        rouletteOrder.clear();
+        roulettePreviousItems.clear();
+        List<Map.Entry<UUID, Integer>> entries = new ArrayList<>(playerNumbers.entrySet());
+        entries.sort(Comparator.comparingInt(Map.Entry::getValue));
+        for (Map.Entry<UUID, Integer> entry : entries) {
+            UUID playerId = entry.getKey();
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null && player.isOnline()) {
+                rouletteOrder.add(playerId);
+            }
+        }
+        if (rouletteOrder.isEmpty()) {
+            rouletteRoundActive = false;
+            return;
+        }
+        rouletteChambers = rouletteOrder.size() * ROULETTE_CHAMBER_MULTIPLIER;
+        rouletteBulletIndex = random.nextInt(Math.max(1, rouletteChambers));
+        rouletteCurrentIndex = 0;
+        rouletteHolderIndex = 0;
+        for (Player player : getOnlineParticipants()) {
+            player.sendMessage(tr("§6§lРаунд %d", currentRound));
+            player.sendMessage(tr("§eРусская рулетка."));
+            player.sendMessage(tr("§7Револьвер уходит по кругу. Натяни лук и выстрели."));
+            player.sendMessage(tr("§7Холостой даёт +1, боевой −1 и конец раунда."));
+            player.sendMessage(tr("§7Время на выстрел: %d сек.", ROULETTE_TIMEOUT_SECONDS));
+        }
+        giveRevolverToCurrentHolder(true);
+        scheduleRouletteAutoTrigger();
+    }
+
+    private void stopSeventhRound() {
+        rouletteRoundActive = false;
+        for (Map.Entry<UUID, ItemStack> entry : roulettePreviousItems.entrySet()) {
+            Player player = Bukkit.getPlayer(entry.getKey());
+            if (player != null && player.isOnline()) {
+                player.getInventory().setItemInMainHand(entry.getValue());
+                removeRouletteAmmo(player);
+            }
+        }
+        rouletteOrder.clear();
+        roulettePreviousItems.clear();
+        rouletteChambers = 0;
+        rouletteBulletIndex = -1;
+        rouletteCurrentIndex = 0;
+        rouletteHolderIndex = 0;
+        if (rouletteAutoTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(rouletteAutoTaskId);
+            rouletteAutoTaskId = -1;
+        }
+        for (Player player : getOnlineParticipants()) {
+            removeRevolver(player);
+        }
+    }
+
+    private void giveRevolverToCurrentHolder(boolean announceAll) {
+        UUID holderId = getCurrentRouletteHolder();
+        if (holderId == null) {
+            return;
+        }
+        Player holder = Bukkit.getPlayer(holderId);
+        if (holder == null || !holder.isOnline()) {
+            advanceRouletteHolder();
+            return;
+        }
+        if (!roulettePreviousItems.containsKey(holderId)) {
+            roulettePreviousItems.put(holderId, holder.getInventory().getItemInMainHand());
+        }
+        holder.getInventory().setItemInMainHand(createRevolverItem());
+        ensureRouletteAmmo(holder);
+        holder.sendMessage(tr("§eУ тебя револьвер. Натяни лук и выстрели."));
+        if (announceAll) {
+            for (Player player : getOnlineParticipants()) {
+                if (!player.getUniqueId().equals(holderId)) {
+                    player.sendMessage(tr("§eРевольвер у игрока §a%s", holder.getName()));
+                }
+            }
+        }
+    }
+
+    private void advanceRouletteHolder() {
+        if (!rouletteRoundActive || rouletteOrder.isEmpty()) {
+            return;
+        }
+        UUID previousId = getCurrentRouletteHolder();
+        if (previousId != null) {
+            Player previous = Bukkit.getPlayer(previousId);
+            if (previous != null && previous.isOnline()) {
+                restoreRevolverItem(previousId, previous);
+                removeRouletteAmmo(previous);
+            }
+        }
+        int size = rouletteOrder.size();
+        for (int i = 0; i < size; i++) {
+            rouletteHolderIndex = (rouletteHolderIndex + 1) % size;
+            UUID nextId = rouletteOrder.get(rouletteHolderIndex);
+            Player next = Bukkit.getPlayer(nextId);
+            if (next != null && next.isOnline()) {
+                giveRevolverToCurrentHolder(true);
+                scheduleRouletteAutoTrigger();
+                return;
+            }
+        }
+        stopSeventhRound();
+    }
+
+    private void scheduleRouletteAutoTrigger() {
+        if (rouletteAutoTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(rouletteAutoTaskId);
+        }
+        rouletteAutoTaskId = Bukkit.getScheduler().runTaskLater(this, () -> handleRouletteTrigger(null, true), ROULETTE_TIMEOUT_SECONDS * 20L).getTaskId();
+    }
+
+    private void handleRouletteTrigger(Player player, boolean auto) {
+        if (!rouletteRoundActive || rouletteOrder.isEmpty()) {
+            return;
+        }
+        UUID holderId = getCurrentRouletteHolder();
+        if (holderId == null) {
+            return;
+        }
+        if (!auto) {
+            if (player == null || !holderId.equals(player.getUniqueId())) {
+                if (player != null) {
+                    player.sendMessage(tr("§cРевольвер не у тебя."));
+                }
+                return;
+            }
+        }
+        if (rouletteAutoTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(rouletteAutoTaskId);
+            rouletteAutoTaskId = -1;
+        }
+        boolean bullet = rouletteCurrentIndex == rouletteBulletIndex;
+        rouletteCurrentIndex++;
+        Player holder = Bukkit.getPlayer(holderId);
+        if (holder == null || !holder.isOnline()) {
+            advanceRouletteHolder();
+            return;
+        }
+        if (bullet) {
+            applyScore(holderId, -1, true);
+            for (Player p : getOnlineParticipants()) {
+                p.sendMessage(tr("§cВыстрел!"));
+            }
+            endSeventhRound();
+            return;
+        }
+        applyScore(holderId, 1, true);
+        for (Player p : getOnlineParticipants()) {
+            String prefix = auto ? tr("§eАвтовыстрел.") : tr("§eВыстрел.");
+            p.sendMessage(prefix);
+        }
+        advanceRouletteHolder();
+    }
+
+    private void endSeventhRound() {
+        if (!rouletteRoundActive) {
+            return;
+        }
+        stopSeventhRound();
+        if (shouldFinishGame()) {
+            finishGame(tr("§eИгра окончена."));
+            return;
+        }
+        List<Player> players = getOnlineParticipants();
+        notifyRoundEnd(players);
+        RoundType nextRound = getNextRoundType();
+        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound, nextRound);
+        sendDebugScores();
+    }
+
+    private void startEighthRound() {
+        stopFirstRound();
+        stopSecondRound();
+        stopThirdRound();
+        stopFourthRound();
+        stopFifthRound();
+        stopSixthRound();
+        stopSeventhRound();
+        stopEighthRound();
+        stopNinthRound();
+        stopTenthRound();
+        memoryRoundActive = true;
+        memoryOrder.clear();
+        memoryWordSequence.clear();
+        memorySpokenWords.clear();
+        memoryTurnIndex = 0;
+        memoryWordIndex = 0;
+        memoryCurrentPlayerId = null;
+        List<Player> players = getOnlineParticipants();
+        if (players.isEmpty()) {
+            memoryRoundActive = false;
+            return;
+        }
+        List<String> pool = new ArrayList<>(SECOND_ROUND_WORDS);
+        Collections.shuffle(pool, random);
+        int wordCount = Math.min(MEMORY_WORDS_PER_PLAYER, pool.size());
+        if (wordCount <= 0) {
+            memoryRoundActive = false;
+            return;
+        }
+        memoryWordSequence.addAll(pool.subList(0, wordCount));
+        for (Player player : players) {
+            player.sendMessage(tr("§6§lРаунд %d", currentRound));
+            player.sendMessage(tr("§eРаунд памяти."));
+            player.sendMessage(tr("§eУ тебя %d секунд на запоминание слов.", MEMORY_STUDY_SECONDS));
+            giveItemToActiveSlot(player, createMemoryBook(memoryWordSequence));
+        }
+        startRoundBar(players, MEMORY_STUDY_SECONDS);
+        if (memoryStudyTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(memoryStudyTaskId);
+        }
+        memoryStudyTaskId = Bukkit.getScheduler().runTaskLater(this, this::startMemoryTurns, MEMORY_STUDY_SECONDS * 20L).getTaskId();
+    }
+
+    private void startMemoryTurns() {
+        if (!memoryRoundActive) {
+            return;
+        }
+        for (Player player : getOnlineParticipants()) {
+            removeMemoryBooks(player);
+        }
+        memoryOrder.clear();
+        List<Map.Entry<UUID, Integer>> entries = new ArrayList<>(playerNumbers.entrySet());
+        entries.sort(Comparator.comparingInt(Map.Entry::getValue));
+        for (Map.Entry<UUID, Integer> entry : entries) {
+            UUID playerId = entry.getKey();
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null && player.isOnline()) {
+                memoryOrder.add(playerId);
+            }
+        }
+        for (Player player : getOnlineParticipants()) {
+            player.sendMessage(tr("§eПоказ окончен. Пишите слова по очереди."));
+        }
+        startMemoryTurn();
+    }
+
+    private void startMemoryTurn() {
+        if (!memoryRoundActive) {
+            return;
+        }
+        if (memoryOrder.isEmpty()) {
+            endEighthRound();
+            return;
+        }
+        if (memoryOrder.size() <= 2 || memoryWordIndex >= memoryWordSequence.size()) {
+            endEighthRound();
+            return;
+        }
+        int size = memoryOrder.size();
+        for (int i = 0; i < size; i++) {
+            if (memoryOrder.isEmpty()) {
+                endEighthRound();
+                return;
+            }
+            int index = memoryTurnIndex % memoryOrder.size();
+            UUID playerId = memoryOrder.get(index);
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null && player.isOnline()) {
+                memoryCurrentPlayerId = playerId;
+                String spoken = memorySpokenWords.isEmpty() ? "—" : String.join(", ", memorySpokenWords);
+                for (Player online : getOnlineParticipants()) {
+                    online.sendMessage(tr("§eХод игрока §a%s", player.getName()));
+                }
+                player.sendMessage(tr("§eСказанные слова: §a%s", spoken));
+                player.sendMessage(tr("§eНапиши следующее слово."));
+                scheduleMemoryTurnTimeout();
+                return;
+            }
+            memoryOrder.remove(index);
+            if (index < memoryTurnIndex) {
+                memoryTurnIndex = Math.max(0, memoryTurnIndex - 1);
+            }
+        }
+        endEighthRound();
+    }
+
+    private void scheduleMemoryTurnTimeout() {
+        if (memoryTurnTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(memoryTurnTaskId);
+        }
+        memoryTurnTaskId = Bukkit.getScheduler().runTaskLater(this, this::handleMemoryTimeout, MEMORY_TURN_SECONDS * 20L).getTaskId();
+    }
+
+    private void handleMemoryTimeout() {
+        if (!memoryRoundActive || memoryCurrentPlayerId == null) {
+            return;
+        }
+        Player player = Bukkit.getPlayer(memoryCurrentPlayerId);
+        if (player != null && player.isOnline()) {
+            player.sendMessage(tr("§cВремя вышло. Ты выбываешь."));
+        }
+        removeMemoryPlayer(memoryCurrentPlayerId, true);
+    }
+
+    private void handleMemoryChat(Player player, String message) {
+        if (!memoryRoundActive) {
+            return;
+        }
+        UUID playerId = player.getUniqueId();
+        if (memoryCurrentPlayerId == null || !playerId.equals(memoryCurrentPlayerId)) {
+            player.sendMessage(tr("§cСейчас не твоя очередь."));
+            return;
+        }
+        if (memoryTurnTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(memoryTurnTaskId);
+            memoryTurnTaskId = -1;
+        }
+        String expected = memoryWordSequence.get(memoryWordIndex);
+        if (!message.trim().equalsIgnoreCase(expected)) {
+            player.sendMessage(tr("§cНеверное слово. Ты выбываешь."));
+            removeMemoryPlayer(playerId, true);
+            return;
+        }
+        memorySpokenWords.add(expected);
+        memoryWordIndex++;
+        for (Player online : getOnlineParticipants()) {
+            online.sendMessage(tr("§eИгрок §a%s §eназвал слово: §a%s", player.getName(), expected));
+        }
+        int currentIndex = memoryOrder.indexOf(playerId);
+        memoryTurnIndex = currentIndex + 1;
+        memoryCurrentPlayerId = null;
+        startMemoryTurn();
+    }
+
+    private void removeMemoryPlayer(UUID playerId, boolean announce) {
+        int index = memoryOrder.indexOf(playerId);
+        if (index >= 0) {
+            memoryOrder.remove(index);
+            if (index < memoryTurnIndex) {
+                memoryTurnIndex = Math.max(0, memoryTurnIndex - 1);
+            }
+        }
+        if (announce) {
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null) {
+                for (Player online : getOnlineParticipants()) {
+                    online.sendMessage(tr("§eИгрок §a%s §eвыбыл из раунда.", player.getName()));
+                }
+            }
+        }
+        memoryCurrentPlayerId = null;
+        startMemoryTurn();
+    }
+
+    private void endEighthRound() {
+        if (!memoryRoundActive) {
+            return;
+        }
+        List<UUID> survivors = new ArrayList<>(memoryOrder);
+        stopEighthRound();
+        if (survivors.size() > 0 && survivors.size() <= 2) {
+            for (UUID playerId : survivors) {
+                applyScore(playerId, 1, false);
+                Player player = Bukkit.getPlayer(playerId);
+                if (player != null && player.isOnline()) {
+                    player.sendMessage(tr("§aВы получили +1 за выживание."));
+                }
+            }
+        }
+        if (shouldFinishGame()) {
+            finishGame(tr("§eИгра окончена."));
+            return;
+        }
+        List<Player> players = getOnlineParticipants();
+        notifyRoundEnd(players);
+        RoundType nextRound = getNextRoundType();
+        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound, nextRound);
+        sendDebugScores();
+    }
+
+    private void stopEighthRound() {
+        memoryRoundActive = false;
+        if (memoryStudyTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(memoryStudyTaskId);
+            memoryStudyTaskId = -1;
+        }
+        if (memoryTurnTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(memoryTurnTaskId);
+            memoryTurnTaskId = -1;
+        }
+        stopRoundBar();
+        for (Player player : getOnlineParticipants()) {
+            removeMemoryBooks(player);
+        }
+        memoryOrder.clear();
+        memoryWordSequence.clear();
+        memorySpokenWords.clear();
+        memoryTurnIndex = 0;
+        memoryWordIndex = 0;
+        memoryCurrentPlayerId = null;
+    }
+
+    private void startNinthRound() {
+        stopFirstRound();
+        stopSecondRound();
+        stopThirdRound();
+        stopFourthRound();
+        stopFifthRound();
+        stopSixthRound();
+        stopSeventhRound();
+        stopEighthRound();
+        stopNinthRound();
+        stopTenthRound();
+        bankRoundActive = true;
+        bankPoints = getOnlineParticipants().size();
+        bankOrder.clear();
+        bankTurnIndex = 0;
+        bankCurrentPlayerId = null;
+        List<Player> players = getOnlineParticipants();
+        if (players.isEmpty()) {
+            bankRoundActive = false;
+            return;
+        }
+        for (Player player : players) {
+            bankOrder.add(player.getUniqueId());
+        }
+        Collections.shuffle(bankOrder, random);
+        for (Player player : players) {
+            player.sendMessage(tr("§6§lРаунд %d", currentRound));
+            player.sendMessage(tr("§eРаунд с банком."));
+            player.sendMessage(tr("§eВ банке: §a%d", bankPoints));
+            int callSeconds = getDynamicSeconds(BANK_CALL_SECONDS, players.size());
+            player.sendMessage(tr("§eВремя на звонки: %d секунд.", callSeconds));
+        }
+        sendBankOrder(players);
+        int callSeconds = getDynamicSeconds(BANK_CALL_SECONDS, players.size());
+        startRoundBar(players, callSeconds);
+        if (bankCallTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(bankCallTaskId);
+        }
+        bankCallTaskId = Bukkit.getScheduler().runTaskLater(this, this::startBankTurns, callSeconds * 20L).getTaskId();
+    }
+
+    private void sendBankOrder(List<Player> players) {
+        if (bankOrder.isEmpty()) {
+            return;
+        }
+        List<String> lines = new ArrayList<>();
+        lines.add(tr("§eОчередь на банк:"));
+        int index = 1;
+        for (UUID playerId : bankOrder) {
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null) {
+                lines.add(tr("§a№%d §7%s", index, player.getName()));
+                index++;
+            }
+        }
+        for (Player player : players) {
+            for (String line : lines) {
+                player.sendMessage(line);
+            }
+        }
+    }
+
+    private void startBankTurns() {
+        if (!bankRoundActive) {
+            return;
+        }
+        List<Player> players = getOnlineParticipants();
+        for (Player player : players) {
+            player.sendMessage(tr("§eВремя звонков вышло."));
+            player.sendMessage(tr("§eНачинаем разбор банка."));
+        }
+        startBankTurn();
+    }
+
+    private void startBankTurn() {
+        if (!bankRoundActive) {
+            return;
+        }
+        if (bankPoints <= 0) {
+            endNinthRound();
+            return;
+        }
+        if (bankOrder.isEmpty()) {
+            endNinthRound();
+            return;
+        }
+        int size = bankOrder.size();
+        for (int i = 0; i < size; i++) {
+            if (bankOrder.isEmpty()) {
+                endNinthRound();
+                return;
+            }
+            int index = bankTurnIndex % bankOrder.size();
+            UUID playerId = bankOrder.get(index);
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null && player.isOnline()) {
+                bankCurrentPlayerId = playerId;
+                for (Player online : getOnlineParticipants()) {
+                    online.sendMessage(tr("§eХод игрока §a%s", player.getName()));
+                    online.sendMessage(tr("§eБаллов в банке: §a%d", bankPoints));
+                }
+                player.sendMessage(tr("§eСколько баллов берёшь?"));
+                scheduleBankTurnTimeout();
+                return;
+            }
+            bankOrder.remove(index);
+            if (index < bankTurnIndex) {
+                bankTurnIndex = Math.max(0, bankTurnIndex - 1);
+            }
+        }
+        endNinthRound();
+    }
+
+    private void scheduleBankTurnTimeout() {
+        if (bankTurnTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(bankTurnTaskId);
+        }
+        int turnSeconds = getDynamicSeconds(BANK_TURN_SECONDS, bankOrder.size());
+        bankTurnTaskId = Bukkit.getScheduler().runTaskLater(this, () -> handleBankChoice(bankCurrentPlayerId, 0, true), turnSeconds * 20L).getTaskId();
+        startRoundBar(getOnlineParticipants(), turnSeconds);
+    }
+
+    private void handleBankChat(Player player, String message) {
+        if (!bankRoundActive) {
+            return;
+        }
+        if (player == null || bankCurrentPlayerId == null) {
+            return;
+        }
+        if (!bankCurrentPlayerId.equals(player.getUniqueId())) {
+            player.sendMessage(tr("§cСейчас не твоя очередь."));
+            return;
+        }
+        int amount;
+        try {
+            amount = Integer.parseInt(message);
+        } catch (NumberFormatException ex) {
+            player.sendMessage(tr("§cНужно число."));
+            return;
+        }
+        if (amount < 0) {
+            player.sendMessage(tr("§cНельзя брать отрицательное число."));
+            return;
+        }
+        if (amount > bankPoints) {
+            player.sendMessage(tr("§cВ банке недостаточно баллов."));
+            return;
+        }
+        handleBankChoice(player.getUniqueId(), amount, false);
+    }
+
+    private void handleBankChoice(UUID playerId, int amount, boolean timeout) {
+        if (!bankRoundActive || bankCurrentPlayerId == null || playerId == null) {
+            return;
+        }
+        if (!bankCurrentPlayerId.equals(playerId)) {
+            return;
+        }
+        if (bankTurnTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(bankTurnTaskId);
+            bankTurnTaskId = -1;
+        }
+        Player player = Bukkit.getPlayer(playerId);
+        if (timeout) {
+            if (player != null) {
+                player.sendMessage(tr("§cВремя вышло. Ты берёшь 0."));
+            }
+            amount = 0;
+        }
+        if (amount > 0) {
+            applyScore(playerId, amount, true);
+        }
+        bankPoints = Math.max(0, bankPoints - amount);
+        if (player != null) {
+            for (Player online : getOnlineParticipants()) {
+                online.sendMessage(tr("§eИгрок §a%s §eвзял §a%d §eиз банка.", player.getName(), amount));
+                online.sendMessage(tr("§eВ банке осталось: §a%d", bankPoints));
+            }
+        }
+        bankCurrentPlayerId = null;
+        bankTurnIndex++;
+        if (bankPoints <= 0) {
+            endNinthRound();
+            return;
+        }
+        startBankTurn();
+    }
+
+    private void endNinthRound() {
+        if (!bankRoundActive) {
+            return;
+        }
+        stopNinthRound();
+        if (shouldFinishGame()) {
+            finishGame(tr("§eИгра окончена."));
+            return;
+        }
+        List<Player> players = getOnlineParticipants();
+        notifyRoundEnd(players);
+        RoundType nextRound = getNextRoundType();
+        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound, nextRound);
+        sendDebugScores();
+    }
+
+    private void stopNinthRound() {
+        bankRoundActive = false;
+        if (bankCallTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(bankCallTaskId);
+            bankCallTaskId = -1;
+        }
+        if (bankTurnTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(bankTurnTaskId);
+            bankTurnTaskId = -1;
+        }
+        stopRoundBar();
+        bankPoints = 0;
+        bankTurnIndex = 0;
+        bankCurrentPlayerId = null;
+        bankOrder.clear();
+    }
+
+    private void startTenthRound() {
+        stopFirstRound();
+        stopSecondRound();
+        stopThirdRound();
+        stopFourthRound();
+        stopFifthRound();
+        stopSixthRound();
+        stopSeventhRound();
+        stopEighthRound();
+        stopNinthRound();
+        stopTenthRound();
+        excludeRoundActive = true;
+        excludeChoices.clear();
+        List<Player> players = getOnlineParticipants();
+        if (players.isEmpty()) {
+            excludeRoundActive = false;
+            return;
+        }
+        for (Player player : players) {
+            player.sendMessage(tr("§6§lРаунд %d", currentRound));
+            player.sendMessage(tr("§eКого вычеркнем?"));
+            player.sendMessage(tr("§7Выбери игрока, чтобы лишить награды."));
+            player.sendMessage(tr("§7Можно не выбирать."));
+            player.sendMessage(tr("§7Открой книгу и кликни по имени, или напиши ник/номер в чат."));
+            updateExcludeBook(player, false);
+        }
+        int roundSeconds = getDynamicSeconds(EXCLUDE_ROUND_SECONDS, players.size());
+        startRoundBar(players, roundSeconds);
+        if (excludeRoundTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(excludeRoundTaskId);
+        }
+        excludeRoundTaskId = Bukkit.getScheduler().runTaskLater(this, this::endTenthRound, roundSeconds * 20L).getTaskId();
+    }
+
+    private void endTenthRound() {
+        if (!excludeRoundActive) {
+            return;
+        }
+        excludeRoundActive = false;
+        stopRoundBar();
+        if (excludeRoundTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(excludeRoundTaskId);
+            excludeRoundTaskId = -1;
+        }
+        Map<UUID, Integer> voteCounts = new HashMap<>();
+        for (UUID targetId : excludeChoices.values()) {
+            if (targetId == null) {
+                continue;
+            }
+            voteCounts.put(targetId, voteCounts.getOrDefault(targetId, 0) + 1);
+        }
+        int maxVotes = 0;
+        for (int count : voteCounts.values()) {
+            if (count > maxVotes) {
+                maxVotes = count;
+            }
+        }
+        Set<UUID> leaders = new HashSet<>();
+        if (maxVotes > 0) {
+            for (Map.Entry<UUID, Integer> entry : voteCounts.entrySet()) {
+                if (entry.getValue() == maxVotes) {
+                    leaders.add(entry.getKey());
+                }
+            }
+        }
+        for (UUID playerId : playerNumbers.keySet()) {
+            if (!leaders.contains(playerId)) {
+                applyScore(playerId, 1, false);
+            }
+        }
+        for (Player player : getOnlineParticipants()) {
+            removeExcludeBooks(player);
+        }
+        excludeChoices.clear();
+        if (shouldFinishGame()) {
+            finishGame(tr("§eИгра окончена."));
+            return;
+        }
+        List<Player> players = getOnlineParticipants();
+        notifyRoundEnd(players);
+        RoundType nextRound = getNextRoundType();
+        startRoundPreparation(players, BETWEEN_ROUND_PREP_SECONDS, tr("§eПодготовка к раунду: §a"), this::startNextRound, nextRound);
+        sendDebugScores();
+    }
+
+    private void stopTenthRound() {
+        excludeRoundActive = false;
+        if (excludeRoundTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(excludeRoundTaskId);
+            excludeRoundTaskId = -1;
+        }
+        stopRoundBar();
+        for (Player player : getOnlineParticipants()) {
+            removeExcludeBooks(player);
+        }
+        excludeChoices.clear();
+    }
+
+    private UUID getCurrentRouletteHolder() {
+        if (rouletteOrder.isEmpty()) {
+            return null;
+        }
+        int size = rouletteOrder.size();
+        int index = rouletteHolderIndex % size;
+        if (index < 0) {
+            index += size;
+        }
+        return rouletteOrder.get(index);
+    }
+
+    private void restoreRevolverItem(UUID playerId, Player player) {
+        ItemStack previous = roulettePreviousItems.get(playerId);
+        if (previous != null) {
+            player.getInventory().setItemInMainHand(previous);
+            roulettePreviousItems.remove(playerId);
+        } else {
+            removeRevolver(player);
+        }
+        removeRouletteAmmo(player);
+    }
+
+    private void saveAndClearInventory(Player player) {
+        if (player == null) {
+            return;
+        }
+        UUID id = player.getUniqueId();
+        if (savedInventories.containsKey(id)) {
+            return;
+        }
+        ItemStack[] contents = cloneItems(player.getInventory().getContents());
+        ItemStack[] armor = cloneItems(player.getInventory().getArmorContents());
+        ItemStack offhand = player.getInventory().getItemInOffHand();
+        ItemStack offhandClone = offhand == null ? null : offhand.clone();
+        savedInventories.put(id, new InventorySnapshot(contents, armor, offhandClone));
+        player.getInventory().clear();
+        player.getInventory().setArmorContents(new ItemStack[0]);
+        player.getInventory().setItemInOffHand(null);
+    }
+
+    private void restoreInventory(Player player) {
+        if (player == null) {
+            return;
+        }
+        InventorySnapshot snapshot = savedInventories.remove(player.getUniqueId());
+        if (snapshot == null) {
+            return;
+        }
+        player.getInventory().setContents(snapshot.contents);
+        player.getInventory().setArmorContents(snapshot.armor);
+        player.getInventory().setItemInOffHand(snapshot.offhand);
+        player.updateInventory();
+    }
+
+    private void restoreInventoriesForOnline() {
+        for (UUID id : new ArrayList<>(savedInventories.keySet())) {
+            Player player = Bukkit.getPlayer(id);
+            if (player != null && player.isOnline()) {
+                restoreInventory(player);
+            }
+        }
+    }
+
+    private void returnPlayersToSavedLocations() {
+        for (UUID id : new ArrayList<>(savedLocations.keySet())) {
+            Player player = Bukkit.getPlayer(id);
+            Location location = savedLocations.get(id);
+            if (player != null && player.isOnline() && location != null) {
+                player.teleport(location);
+            }
+        }
+        savedLocations.clear();
+    }
+
+    private void clearSchematicRooms() {
+        if (!usingSchematicRooms || schematicRegions.isEmpty()) {
+            schematicRegions.clear();
+            usingSchematicRooms = false;
+            return;
+        }
+        for (CuboidRegion region : new ArrayList<>(schematicRegions)) {
+            try (EditSession editSession = WorldEdit.getInstance().newEditSession(region.getWorld())) {
+                editSession.setBlocks(region, BlockTypes.AIR.getDefaultState());
+                editSession.flushSession();
+            } catch (Exception ignored) {
+            }
+        }
+        schematicRegions.clear();
+        usingSchematicRooms = false;
+    }
+
+    private ItemStack[] cloneItems(ItemStack[] items) {
+        if (items == null) {
+            return new ItemStack[0];
+        }
+        ItemStack[] copy = new ItemStack[items.length];
+        for (int i = 0; i < items.length; i++) {
+            ItemStack item = items[i];
+            copy[i] = item == null ? null : item.clone();
+        }
+        return copy;
+    }
+
+    private String formatPlayerList(Set<UUID> ids) {
+        List<String> names = new ArrayList<>();
+        for (UUID id : ids) {
+            Player player = Bukkit.getPlayer(id);
+            if (player != null && player.isOnline()) {
+                names.add(player.getName());
+            }
+        }
+        if (names.isEmpty()) {
+            return tr("§cНеизвестно");
+        }
+        return String.join(", ", names);
+    }
+
+    private void applyScore(UUID playerId, int delta, boolean notifyPlayer) {
+        if (delta == 0) {
+            return;
+        }
+        scores.put(playerId, scores.getOrDefault(playerId, 0) + delta);
+        if (!notifyPlayer) {
+            return;
+        }
+        Player player = Bukkit.getPlayer(playerId);
+        if (player == null || !player.isOnline()) {
+            return;
+        }
+        if (delta > 0) {
+            player.sendMessage(tr("§aВы получили +%d.", delta));
+        } else {
+            player.sendMessage(tr("§cВы получили %d.", delta));
+        }
+    }
+
+    private void notifyRoundEnd(List<Player> players) {
+        if (!debug) {
+            for (Player player : players) {
+                player.sendMessage(tr("§aРаунд завершён."));
+            }
+        }
+        for (Player player : players) {
+            player.sendMessage(tr("§eРаунд закончен. §7Подготовка 30 секунд."));
+        }
+    }
+
+    private void sendDebugScores() {
+        if (!debug) {
+            return;
+        }
+        List<Map.Entry<UUID, Integer>> entries = new ArrayList<>(playerNumbers.entrySet());
+        entries.sort(Comparator.comparingInt(Map.Entry::getValue));
+        for (Player viewer : getOnlineParticipants()) {
+            viewer.sendMessage(tr("§8[Debug] §eИтоги раунда:"));
+            for (Map.Entry<UUID, Integer> entry : entries) {
+                Player player = Bukkit.getPlayer(entry.getKey());
+                if (player == null || !player.isOnline()) {
+                    continue;
+                }
+                int score = scores.getOrDefault(entry.getKey(), 0);
+                viewer.sendMessage(tr("§7№%d §f%s §7— §a%d", entry.getValue(), player.getName(), score));
+            }
+        }
     }
 
     private void spawnDoorRoundPlates(Player player, Location center) {
@@ -1381,14 +2705,18 @@ public class SixRooms extends JavaPlugin implements Listener {
 
     private void finishGame(String message) {
         endAllCalls(message);
+        stopRegenTask();
         stopFirstRoundPreparation();
         stopFirstRound();
         stopSecondRound();
         stopThirdRound();
         stopFourthRound();
         stopFifthRound();
-        stopRoundBar();
-        stopRoundBar();
+        stopSixthRound();
+        stopSeventhRound();
+        stopEighthRound();
+        stopNinthRound();
+        stopTenthRound();
         stopRoundBar();
         List<Player> players = getOnlineParticipants();
         if (message != null) {
@@ -1403,6 +2731,9 @@ public class SixRooms extends JavaPlugin implements Listener {
                 player.sendMessage(tr("§eПриватный канал связи отключен."));
             }
         }
+        returnPlayersToSavedLocations();
+        clearSchematicRooms();
+        restoreInventoriesForOnline();
         participants.clear();
         playerNumbers.clear();
         roomCenters.clear();
@@ -1430,6 +2761,25 @@ public class SixRooms extends JavaPlugin implements Listener {
             && secondRoundWord != null
             && secondRoundCurrentCaller != null
             && secondRoundCurrentCaller.equals(playerId);
+    }
+
+    private boolean hasOtherSecondRoundTargets(UUID callerId, UUID blockedId) {
+        for (UUID playerId : playerNumbers.keySet()) {
+            if (playerId.equals(callerId)) {
+                continue;
+            }
+            if (secondRoundCalled.contains(playerId)) {
+                continue;
+            }
+            if (blockedId != null && blockedId.equals(playerId)) {
+                continue;
+            }
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null && player.isOnline()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void handleSecondRoundChat(Player player, String message) {
@@ -1466,6 +2816,7 @@ public class SixRooms extends JavaPlugin implements Listener {
             return;
         }
         secondRoundCalled.add(calleeId);
+        secondRoundLastCaller.put(calleeId, callerId);
         secondRoundCurrentCaller = calleeId;
         Player callee = Bukkit.getPlayer(calleeId);
         if (callee != null && callee.isOnline()) {
@@ -1474,6 +2825,111 @@ public class SixRooms extends JavaPlugin implements Listener {
         if (secondRoundCalled.size() >= playerNumbers.size()) {
             endSecondRound();
         }
+    }
+
+    private void handleVote(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage(tr("§cКоманду можно выполнить только в игре."));
+            return;
+        }
+        if (!voteRoundActive || state != GameState.RUNNING) {
+            sender.sendMessage(tr("§cСейчас нет раунда голосования."));
+            return;
+        }
+        if (args.length < 2) {
+            sender.sendMessage(tr("§eИспользование: §7/sixrooms vote <ник|номер>"));
+            return;
+        }
+        Player player = (Player) sender;
+        if (!playerNumbers.containsKey(player.getUniqueId())) {
+            player.sendMessage(tr("§cТы не участвуешь в игре."));
+            return;
+        }
+        handleVoteChoice(player, args[1]);
+    }
+
+    private void handleVoteChoice(Player player, String message) {
+        if (!voteRoundActive || state != GameState.RUNNING) {
+            return;
+        }
+        UUID targetId = resolvePlayerChoice(message);
+        if (targetId == null) {
+            player.sendMessage(tr("§cНеверный выбор. Напиши ник или номер игрока."));
+            return;
+        }
+        if (player.getUniqueId().equals(targetId)) {
+            player.sendMessage(tr("§cНельзя голосовать за себя."));
+            return;
+        }
+        voteChoices.put(player.getUniqueId(), targetId);
+        player.sendMessage(tr("§7Выбор сохранён."));
+    }
+
+    private void handleMask(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage(tr("§cКоманду можно выполнить только в игре."));
+            return;
+        }
+        if (!firstRoundActive || state != GameState.RUNNING) {
+            sender.sendMessage(tr("§cСейчас нет раунда с масками."));
+            return;
+        }
+        if (args.length < 2) {
+            sender.sendMessage(tr("§eИспользование: §7/sixrooms mask <ник|номер>"));
+            return;
+        }
+        Player player = (Player) sender;
+        if (!playerNumbers.containsKey(player.getUniqueId())) {
+            player.sendMessage(tr("§cТы не участвуешь в игре."));
+            return;
+        }
+        handleRoundChoice(player, args[1]);
+    }
+
+    private void handleExclude(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage(tr("§cКоманду можно выполнить только в игре."));
+            return;
+        }
+        if (!excludeRoundActive || state != GameState.RUNNING) {
+            sender.sendMessage(tr("§cСейчас нет раунда вычеркивания."));
+            return;
+        }
+        if (args.length < 2) {
+            sender.sendMessage(tr("§eИспользование: §7/sixrooms exclude <ник|номер|none>"));
+            return;
+        }
+        Player player = (Player) sender;
+        if (!playerNumbers.containsKey(player.getUniqueId())) {
+            player.sendMessage(tr("§cТы не участвуешь в игре."));
+            return;
+        }
+        handleExcludeChoice(player, args[1]);
+    }
+
+    private void handleExcludeChoice(Player player, String message) {
+        if (!excludeRoundActive || state != GameState.RUNNING) {
+            return;
+        }
+        String normalized = message.trim().toLowerCase(Locale.ROOT);
+        if (normalized.equals("none") || normalized.equals("никого") || normalized.equals("0")) {
+            excludeChoices.remove(player.getUniqueId());
+            updateExcludeBook(player, true);
+            player.sendMessage(tr("§7Выбор сброшен."));
+            return;
+        }
+        UUID targetId = resolvePlayerChoice(message);
+        if (targetId == null) {
+            player.sendMessage(tr("§cНеверный выбор. Напиши ник или номер игрока."));
+            return;
+        }
+        if (player.getUniqueId().equals(targetId)) {
+            player.sendMessage(tr("§cНельзя выбрать себя."));
+            return;
+        }
+        excludeChoices.put(player.getUniqueId(), targetId);
+        updateExcludeBook(player, true);
+        player.sendMessage(tr("§7Выбор сохранён."));
     }
 
     private void startRoundBar(List<Player> players, int totalSeconds) {
@@ -1485,7 +2941,7 @@ public class SixRooms extends JavaPlugin implements Listener {
         }
         final int[] remaining = {totalSeconds};
         roundBarTaskId = Bukkit.getScheduler().runTaskTimer(this, () -> {
-            if (!firstRoundActive && !secondRoundActive && !thirdRoundActive) {
+            if (!firstRoundActive && !secondRoundActive && !thirdRoundActive && !fourthRoundActive && !doorsRoundActive && !voteRoundActive && !rouletteRoundActive && !memoryRoundActive && !bankRoundActive && !excludeRoundActive) {
                 stopRoundBar();
                 return;
             }
@@ -1509,6 +2965,38 @@ public class SixRooms extends JavaPlugin implements Listener {
         if (roundBar != null) {
             roundBar.removeAll();
             roundBar = null;
+        }
+    }
+
+    private void startRegenTask() {
+        stopRegenTask();
+        regenTaskId = Bukkit.getScheduler().runTaskTimer(this, () -> {
+            if (state != GameState.RUNNING) {
+                stopRegenTask();
+                return;
+            }
+            for (Player player : getOnlineParticipants()) {
+                if (player.isDead()) {
+                    continue;
+                }
+                double maxHealth = player.getMaxHealth();
+                if (player.getHealth() < maxHealth) {
+                    player.setHealth(maxHealth);
+                }
+                if (player.getFoodLevel() < 20) {
+                    player.setFoodLevel(20);
+                }
+                if (player.getSaturation() < 20f) {
+                    player.setSaturation(20f);
+                }
+            }
+        }, 0L, 20L).getTaskId();
+    }
+
+    private void stopRegenTask() {
+        if (regenTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(regenTaskId);
+            regenTaskId = -1;
         }
     }
 
@@ -1585,6 +3073,7 @@ public class SixRooms extends JavaPlugin implements Listener {
             return;
         }
         firstRoundChoices.put(player.getUniqueId(), targetId);
+        updateMaskBook(player, true);
         player.sendMessage(tr("§7Выбор сохранён."));
     }
 
@@ -1612,7 +3101,7 @@ public class SixRooms extends JavaPlugin implements Listener {
     }
 
     private void sendUsage(CommandSender sender) {
-        sender.sendMessage(tr("§eИспользование: §7/sixrooms open|join|leave|start|cancel|status|phone"));
+        sender.sendMessage(tr("§eИспользование: §7/sixrooms open|join|leave|start|cancel|status|phone|vote|mask|exclude|debug [start|skip] <round>"));
     }
 
     private void handlePhone(CommandSender sender) {
@@ -1629,13 +3118,164 @@ public class SixRooms extends JavaPlugin implements Listener {
         player.sendMessage(tr("§aТелефон выдан."));
     }
 
-    private void handleDebug(CommandSender sender) {
+    private void handleDebug(CommandSender sender, String[] args) {
         if (!sender.hasPermission(ADMIN_PERMISSION)) {
             sender.sendMessage(tr("§cНет прав."));
             return;
         }
-        debug = !debug;
-        sender.sendMessage(tr("§eРежим отладки: %s", debug ? tr("§aВКЛ") : tr("§cВЫКЛ")));
+        if (args.length == 1) {
+            debug = !debug;
+            sender.sendMessage(tr("§eРежим отладки: %s", debug ? tr("§aВКЛ") : tr("§cВЫКЛ")));
+            return;
+        }
+        if (!debug) {
+            sender.sendMessage(tr("§cСначала включи режим отладки."));
+            return;
+        }
+        if (args.length < 3) {
+            sender.sendMessage(tr("§eИспользование: §7/sixrooms debug start|skip <round>"));
+            return;
+        }
+        String action = args[1].toLowerCase(Locale.ROOT);
+        Integer roundNumber = parseRoundNumber(args[2]);
+        if (roundNumber == null) {
+            sender.sendMessage(tr("§cНеверный номер раунда."));
+            return;
+        }
+        RoundType roundType = getRoundTypeByNumber(roundNumber);
+        if (roundType == null) {
+            sender.sendMessage(tr("§cНеверный номер раунда."));
+            return;
+        }
+        if (state != GameState.RUNNING) {
+            sender.sendMessage(tr("§cИгра не запущена."));
+            return;
+        }
+        if ("start".equals(action) || "skip".equals(action)) {
+            startDebugRound(roundType, roundNumber);
+            sender.sendMessage(tr("§aЗапущен раунд %d.", roundNumber));
+            return;
+        }
+        sender.sendMessage(tr("§eИспользование: §7/sixrooms debug start|skip <round>"));
+    }
+
+    private Integer parseRoundNumber(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String value = raw.trim().toLowerCase(Locale.ROOT);
+        try {
+            int number = Integer.parseInt(value);
+            if (number < 1 || number > 10) {
+                return null;
+            }
+            return number;
+        } catch (NumberFormatException ignored) {
+        }
+        switch (value) {
+            case "first":
+            case "первый":
+                return 1;
+            case "second":
+            case "второй":
+                return 2;
+            case "third":
+            case "третий":
+                return 3;
+            case "fourth":
+            case "четвертый":
+                return 4;
+            case "fifth":
+            case "пятый":
+                return 5;
+            case "sixth":
+            case "шестой":
+                return 6;
+            case "seventh":
+            case "седьмой":
+                return 7;
+            case "eighth":
+            case "восьмой":
+                return 8;
+            case "ninth":
+            case "девятый":
+                return 9;
+            case "tenth":
+            case "десятый":
+                return 10;
+            default:
+                return null;
+        }
+    }
+
+    private RoundType getRoundTypeByNumber(int number) {
+        switch (number) {
+            case 1:
+                return RoundType.FIRST;
+            case 2:
+                return RoundType.SECOND;
+            case 3:
+                return RoundType.THIRD;
+            case 4:
+                return RoundType.FOURTH;
+            case 5:
+                return RoundType.FIFTH;
+            case 6:
+                return RoundType.SIXTH;
+            case 7:
+                return RoundType.SEVENTH;
+            case 8:
+                return RoundType.EIGHTH;
+            case 9:
+                return RoundType.NINTH;
+            case 10:
+                return RoundType.TENTH;
+            default:
+                return null;
+        }
+    }
+
+    private void startDebugRound(RoundType roundType, int roundNumber) {
+        stopAllRoundsForDebug();
+        currentRound = roundNumber;
+        currentRoundType = roundType;
+        nextRoundType = null;
+        if (roundType == RoundType.FIRST) {
+            startFirstRound();
+        } else if (roundType == RoundType.SECOND) {
+            startSecondRound();
+        } else if (roundType == RoundType.THIRD) {
+            startThirdRound();
+        } else if (roundType == RoundType.FOURTH) {
+            startFourthRound();
+        } else if (roundType == RoundType.FIFTH) {
+            startFifthRound();
+        } else if (roundType == RoundType.SIXTH) {
+            startSixthRound();
+        } else if (roundType == RoundType.SEVENTH) {
+            startSeventhRound();
+        } else if (roundType == RoundType.EIGHTH) {
+            startEighthRound();
+        } else if (roundType == RoundType.NINTH) {
+            startNinthRound();
+        } else if (roundType == RoundType.TENTH) {
+            startTenthRound();
+        }
+    }
+
+    private void stopAllRoundsForDebug() {
+        stopFirstRoundPreparation();
+        stopFirstRound();
+        stopSecondRound();
+        stopThirdRound();
+        stopFourthRound();
+        stopFifthRound();
+        stopSixthRound();
+        stopSeventhRound();
+        stopEighthRound();
+        stopNinthRound();
+        stopTenthRound();
+        stopRoundBar();
     }
 
     private ClipboardReader getClipboardReader(File schematic) throws IOException {
@@ -1644,6 +3284,104 @@ public class SixRooms extends JavaPlugin implements Listener {
             return null;
         }
         return format.getReader(new FileInputStream(schematic));
+    }
+
+    private File findSchematicFile() {
+        File[] files = getDataFolder().listFiles();
+        if (files == null) {
+            return null;
+        }
+        File best = null;
+        long bestTime = -1;
+        for (File file : files) {
+            if (file == null || !file.isFile()) {
+                continue;
+            }
+            if (ClipboardFormats.findByFile(file) == null) {
+                continue;
+            }
+            long modified = file.lastModified();
+            if (modified > bestTime) {
+                bestTime = modified;
+                best = file;
+            }
+        }
+        return best;
+    }
+
+    private boolean hasSchematicLikeFiles() {
+        File[] files = getDataFolder().listFiles();
+        if (files == null) {
+            return false;
+        }
+        for (File file : files) {
+            if (file == null || !file.isFile()) {
+                continue;
+            }
+            String name = file.getName().toLowerCase(Locale.ROOT);
+            if (name.endsWith(".schem") || name.endsWith(".schematic") || name.endsWith(".litematic") || name.endsWith(".nbt")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int getSchematicPasteY(World world, Clipboard clipboard, int baseY) {
+        int maxHeight = world.getMaxHeight();
+        int minHeight = world.getMinHeight();
+        int originY = clipboard.getOrigin().y();
+        int regionMinY = clipboard.getRegion().getMinimumPoint().y();
+        int regionMaxY = clipboard.getRegion().getMaximumPoint().y();
+        int pasteY = baseY;
+        int minWorldY = pasteY + (regionMinY - originY);
+        int maxWorldY = pasteY + (regionMaxY - originY);
+        if (minWorldY < minHeight) {
+            pasteY += (minHeight - minWorldY);
+        }
+        if (maxWorldY > maxHeight - 1) {
+            pasteY -= (maxWorldY - (maxHeight - 1));
+        }
+        return pasteY;
+    }
+
+    private List<BlockVector3> findSchematicSpawnOffsets(Clipboard clipboard) {
+        BlockVector3 origin = clipboard.getOrigin();
+        List<BlockVector3> offsets = new ArrayList<>();
+        for (BlockVector3 pos : clipboard.getRegion()) {
+            BlockType type = clipboard.getBlock(pos).getBlockType();
+            if (type == BlockTypes.STRUCTURE_VOID) {
+                offsets.add(pos.subtract(origin));
+            }
+        }
+        if (offsets.isEmpty()) {
+            offsets.add(clipboard.getRegion().getCenter().toBlockPoint().subtract(origin));
+        }
+        return offsets;
+    }
+
+    private CuboidRegion getPastedRegion(Clipboard clipboard, World world, BlockVector3 pasteTo) {
+        BlockVector3 offset = pasteTo.subtract(clipboard.getOrigin());
+        BlockVector3 min = clipboard.getRegion().getMinimumPoint().add(offset);
+        BlockVector3 max = clipboard.getRegion().getMaximumPoint().add(offset);
+        return new CuboidRegion(BukkitAdapter.adapt(world), min, max);
+    }
+
+    private void markPhoneBlocks(Clipboard clipboard, World world, BlockVector3 pasteTo) {
+        BlockVector3 offset = pasteTo.subtract(clipboard.getOrigin());
+        for (BlockVector3 pos : clipboard.getRegion()) {
+            BlockType type = clipboard.getBlock(pos).getBlockType();
+            if (type != BlockTypes.BARREL) {
+                continue;
+            }
+            BlockVector3 worldPos = pos.add(offset);
+            Block block = world.getBlockAt(worldPos.x(), worldPos.y(), worldPos.z());
+            if (!(block.getState() instanceof TileState)) {
+                continue;
+            }
+            TileState state = (TileState) block.getState();
+            state.getPersistentDataContainer().set(phoneBlockKey, PersistentDataType.BYTE, (byte) 1);
+            state.update();
+        }
     }
 
     private boolean pasteSchematic(Clipboard clipboard, World world, BlockVector3 to) {
@@ -1842,6 +3580,24 @@ public class SixRooms extends JavaPlugin implements Listener {
     }
 
     @EventHandler
+    public void onRevolverShoot(EntityShootBowEvent event) {
+        if (!(event.getEntity() instanceof Player)) {
+            return;
+        }
+        ItemStack bow = event.getBow();
+        if (!isRevolverItem(bow)) {
+            return;
+        }
+        Player player = (Player) event.getEntity();
+        if (!rouletteRoundActive || state != GameState.RUNNING) {
+            player.sendMessage(tr("§cСейчас нет раунда русской рулетки."));
+            return;
+        }
+        event.setCancelled(true);
+        handleRouletteTrigger(player, false);
+    }
+
+    @EventHandler
     public void onPhoneGuiClick(InventoryClickEvent event) {
         if (!(event.getWhoClicked() instanceof Player)) {
             return;
@@ -1951,6 +3707,13 @@ public class SixRooms extends JavaPlugin implements Listener {
             caller.sendMessage(tr("§cНельзя звонить себе."));
             return;
         }
+        if (secondRoundActive) {
+            UUID lastCaller = secondRoundLastCaller.get(caller.getUniqueId());
+            if (lastCaller != null && lastCaller.equals(targetUuid) && hasOtherSecondRoundTargets(caller.getUniqueId(), lastCaller)) {
+                caller.sendMessage(tr("§cНельзя звонить тому, кто только что звонил тебе."));
+                return;
+            }
+        }
         if (secondRoundActive && secondRoundCalled.contains(targetUuid)) {
             caller.sendMessage(tr("§cЭтот игрок уже получил звонок."));
             return;
@@ -1973,10 +3736,50 @@ public class SixRooms extends JavaPlugin implements Listener {
     }
 
     @EventHandler
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        if (state == GameState.RUNNING) {
+            return;
+        }
+        UUID playerId = event.getPlayer().getUniqueId();
+        if (savedInventories.containsKey(playerId)) {
+            restoreInventory(event.getPlayer());
+        }
+    }
+
+    @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
         CallSession call = callsByPlayer.get(event.getPlayer().getUniqueId());
         if (call != null) {
             endCall(call, tr("§eЗвонок завершен."));
+        }
+        if (rouletteRoundActive) {
+            UUID holderId = getCurrentRouletteHolder();
+            if (holderId != null && holderId.equals(event.getPlayer().getUniqueId())) {
+                advanceRouletteHolder();
+            }
+        }
+        if (memoryRoundActive) {
+            UUID playerId = event.getPlayer().getUniqueId();
+            if (memoryOrder.contains(playerId)) {
+                removeMemoryPlayer(playerId, true);
+            }
+        }
+        if (bankRoundActive) {
+            UUID playerId = event.getPlayer().getUniqueId();
+            int index = bankOrder.indexOf(playerId);
+            if (index >= 0) {
+                bankOrder.remove(index);
+                if (index < bankTurnIndex) {
+                    bankTurnIndex = Math.max(0, bankTurnIndex - 1);
+                }
+                if (playerId.equals(bankCurrentPlayerId)) {
+                    bankCurrentPlayerId = null;
+                    startBankTurn();
+                }
+            }
+        }
+        if (excludeRoundActive) {
+            excludeChoices.remove(event.getPlayer().getUniqueId());
         }
     }
 
@@ -2005,6 +3808,24 @@ public class SixRooms extends JavaPlugin implements Listener {
                 return;
             }
         }
+        if (memoryRoundActive) {
+            String message = event.getMessage().trim();
+            event.setCancelled(true);
+            Bukkit.getScheduler().runTask(this, () -> handleMemoryChat(event.getPlayer(), message));
+            return;
+        }
+        if (bankRoundActive) {
+            String message = event.getMessage().trim();
+            event.setCancelled(true);
+            Bukkit.getScheduler().runTask(this, () -> handleBankChat(event.getPlayer(), message));
+            return;
+        }
+        if (excludeRoundActive) {
+            String message = event.getMessage().trim();
+            event.setCancelled(true);
+            Bukkit.getScheduler().runTask(this, () -> handleExcludeChoice(event.getPlayer(), message));
+            return;
+        }
         if (firstRoundActive) {
             String message = event.getMessage().trim();
             event.setCancelled(true);
@@ -2015,6 +3836,12 @@ public class SixRooms extends JavaPlugin implements Listener {
             String message = event.getMessage().trim();
             event.setCancelled(true);
             Bukkit.getScheduler().runTask(this, () -> handleSecondRoundChat(event.getPlayer(), message));
+            return;
+        }
+        if (voteRoundActive) {
+            String message = event.getMessage().trim();
+            event.setCancelled(true);
+            Bukkit.getScheduler().runTask(this, () -> handleVoteChoice(event.getPlayer(), message));
             return;
         }
         event.setCancelled(true);
@@ -2031,6 +3858,371 @@ public class SixRooms extends JavaPlugin implements Listener {
             item.setItemMeta(meta);
         }
         return item;
+    }
+
+    private ItemStack createRevolverItem() {
+        ItemStack item = new ItemStack(Material.BOW);
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            meta.setDisplayName(tr("§cРевольвер"));
+            meta.getPersistentDataContainer().set(revolverItemKey, PersistentDataType.BYTE, (byte) 1);
+            item.setItemMeta(meta);
+        }
+        return item;
+    }
+
+    private boolean isRevolverItem(ItemStack item) {
+        if (item == null) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        return meta.getPersistentDataContainer().has(revolverItemKey, PersistentDataType.BYTE);
+    }
+
+    private void removeRevolver(Player player) {
+        if (player == null) {
+            return;
+        }
+        ItemStack current = player.getInventory().getItemInMainHand();
+        if (isRevolverItem(current)) {
+            player.getInventory().setItemInMainHand(null);
+        }
+        ItemStack[] contents = player.getInventory().getContents();
+        for (int i = 0; i < contents.length; i++) {
+            ItemStack item = contents[i];
+            if (item == null) {
+                continue;
+            }
+            if (isRevolverItem(item)) {
+                contents[i] = null;
+            }
+        }
+        player.getInventory().setContents(contents);
+    }
+
+    private ItemStack createRouletteAmmo() {
+        ItemStack item = new ItemStack(Material.ARROW, 1);
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            meta.setDisplayName(tr("§7Патрон"));
+            meta.getPersistentDataContainer().set(rouletteAmmoKey, PersistentDataType.BYTE, (byte) 1);
+            item.setItemMeta(meta);
+        }
+        return item;
+    }
+
+    private boolean isRouletteAmmo(ItemStack item) {
+        if (item == null) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        return meta.getPersistentDataContainer().has(rouletteAmmoKey, PersistentDataType.BYTE);
+    }
+
+    private void ensureRouletteAmmo(Player player) {
+        if (player == null) {
+            return;
+        }
+        for (ItemStack item : player.getInventory().getContents()) {
+            if (isRouletteAmmo(item)) {
+                return;
+            }
+        }
+        player.getInventory().addItem(createRouletteAmmo());
+    }
+
+    private void removeRouletteAmmo(Player player) {
+        if (player == null) {
+            return;
+        }
+        ItemStack[] contents = player.getInventory().getContents();
+        for (int i = 0; i < contents.length; i++) {
+            ItemStack item = contents[i];
+            if (isRouletteAmmo(item)) {
+                contents[i] = null;
+            }
+        }
+        player.getInventory().setContents(contents);
+    }
+
+    private ItemStack createVoteBook(Player player) {
+        ItemStack item = new ItemStack(Material.WRITTEN_BOOK);
+        BookMeta meta = (BookMeta) item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+        meta.setTitle(tr("Голосование"));
+        meta.setAuthor("SixRooms");
+        meta.getPersistentDataContainer().set(voteBookKey, PersistentDataType.BYTE, (byte) 1);
+        List<Map.Entry<UUID, Integer>> entries = new ArrayList<>(playerNumbers.entrySet());
+        entries.sort(Comparator.comparingInt(Map.Entry::getValue));
+        TextComponent page = new TextComponent("");
+        TextComponent header = new TextComponent(tr("Выберите игрока:"));
+        header.setColor(ChatColor.GOLD);
+        page.addExtra(header);
+        page.addExtra("\n");
+        for (Map.Entry<UUID, Integer> entry : entries) {
+            UUID targetId = entry.getKey();
+            if (targetId.equals(player.getUniqueId())) {
+                continue;
+            }
+            Player target = Bukkit.getPlayer(targetId);
+            if (target == null || !target.isOnline()) {
+                continue;
+            }
+            String lineText = String.format("%d. %s", entry.getValue(), target.getName());
+            TextComponent line = new TextComponent(lineText);
+            line.setColor(ChatColor.AQUA);
+            line.setClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/sixrooms vote " + entry.getValue()));
+            page.addExtra(line);
+            page.addExtra("\n");
+        }
+        List<BaseComponent[]> pages = new ArrayList<>();
+        pages.add(new BaseComponent[] {page});
+        meta.spigot().setPages(pages);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private void giveItemToActiveSlot(Player player, ItemStack item) {
+        if (player == null || item == null) {
+            return;
+        }
+        int slot = player.getInventory().getHeldItemSlot();
+        ItemStack previous = player.getInventory().getItem(slot);
+        if (previous != null && previous.getType() != Material.AIR) {
+            Map<Integer, ItemStack> leftover = player.getInventory().addItem(previous);
+            if (!leftover.isEmpty()) {
+                for (ItemStack stack : leftover.values()) {
+                    player.getWorld().dropItemNaturally(player.getLocation(), stack);
+                }
+            }
+        }
+        player.getInventory().setItem(slot, item);
+        player.updateInventory();
+    }
+
+    private void updateMaskBook(Player player, boolean open) {
+        if (player == null) {
+            return;
+        }
+        removeMaskBooks(player);
+        UUID selected = firstRoundChoices.get(player.getUniqueId());
+        ItemStack book = createMaskBook(player, selected);
+        giveItemToActiveSlot(player, book);
+        if (open) {
+            player.openBook(book);
+        }
+    }
+
+    private ItemStack createMaskBook(Player player, UUID selected) {
+        ItemStack item = new ItemStack(Material.WRITTEN_BOOK);
+        BookMeta meta = (BookMeta) item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+        meta.setTitle(tr("Маски"));
+        meta.setAuthor("SixRooms");
+        meta.getPersistentDataContainer().set(maskBookKey, PersistentDataType.BYTE, (byte) 1);
+        List<Map.Entry<UUID, Integer>> entries = new ArrayList<>(playerNumbers.entrySet());
+        entries.sort(Comparator.comparingInt(Map.Entry::getValue));
+        TextComponent page = new TextComponent("");
+        TextComponent header = new TextComponent(tr("Выберите игрока:"));
+        header.setColor(ChatColor.GOLD);
+        page.addExtra(header);
+        page.addExtra("\n");
+        for (Map.Entry<UUID, Integer> entry : entries) {
+            UUID targetId = entry.getKey();
+            Player target = Bukkit.getPlayer(targetId);
+            if (target == null || !target.isOnline()) {
+                continue;
+            }
+            String lineText = String.format("%d. %s", entry.getValue(), target.getName());
+            TextComponent line = new TextComponent(lineText);
+            boolean isSelected = selected != null && selected.equals(targetId);
+            line.setColor(isSelected ? ChatColor.GRAY : ChatColor.AQUA);
+            line.setStrikethrough(isSelected);
+            line.setClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/sixrooms mask " + entry.getValue()));
+            page.addExtra(line);
+            page.addExtra("\n");
+        }
+        List<BaseComponent[]> pages = new ArrayList<>();
+        pages.add(new BaseComponent[] {page});
+        meta.spigot().setPages(pages);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private void updateExcludeBook(Player player, boolean open) {
+        if (player == null) {
+            return;
+        }
+        removeExcludeBooks(player);
+        UUID selected = excludeChoices.get(player.getUniqueId());
+        ItemStack book = createExcludeBook(player, selected);
+        giveItemToActiveSlot(player, book);
+        if (open) {
+            player.openBook(book);
+        }
+    }
+
+    private ItemStack createExcludeBook(Player player, UUID selected) {
+        ItemStack item = new ItemStack(Material.WRITTEN_BOOK);
+        BookMeta meta = (BookMeta) item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+        meta.setTitle(tr("Вычёркивание"));
+        meta.setAuthor("SixRooms");
+        meta.getPersistentDataContainer().set(excludeBookKey, PersistentDataType.BYTE, (byte) 1);
+        List<Map.Entry<UUID, Integer>> entries = new ArrayList<>(playerNumbers.entrySet());
+        entries.sort(Comparator.comparingInt(Map.Entry::getValue));
+        TextComponent page = new TextComponent("");
+        TextComponent header = new TextComponent(tr("Выберите игрока:"));
+        header.setColor(ChatColor.GOLD);
+        page.addExtra(header);
+        page.addExtra("\n");
+        TextComponent noneLine = new TextComponent(tr("0. Никого"));
+        boolean noneSelected = selected == null;
+        noneLine.setColor(noneSelected ? ChatColor.GRAY : ChatColor.AQUA);
+        noneLine.setStrikethrough(noneSelected);
+        noneLine.setClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/sixrooms exclude none"));
+        page.addExtra(noneLine);
+        page.addExtra("\n");
+        for (Map.Entry<UUID, Integer> entry : entries) {
+            UUID targetId = entry.getKey();
+            if (targetId.equals(player.getUniqueId())) {
+                continue;
+            }
+            Player target = Bukkit.getPlayer(targetId);
+            if (target == null || !target.isOnline()) {
+                continue;
+            }
+            String lineText = String.format("%d. %s", entry.getValue(), target.getName());
+            TextComponent line = new TextComponent(lineText);
+            boolean isSelected = selected != null && selected.equals(targetId);
+            line.setColor(isSelected ? ChatColor.GRAY : ChatColor.AQUA);
+            line.setStrikethrough(isSelected);
+            line.setClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/sixrooms exclude " + entry.getValue()));
+            page.addExtra(line);
+            page.addExtra("\n");
+        }
+        List<BaseComponent[]> pages = new ArrayList<>();
+        pages.add(new BaseComponent[] {page});
+        meta.spigot().setPages(pages);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private void removeVoteBooks(Player player) {
+        if (player == null) {
+            return;
+        }
+        ItemStack[] contents = player.getInventory().getContents();
+        for (int i = 0; i < contents.length; i++) {
+            ItemStack item = contents[i];
+            if (item == null) {
+                continue;
+            }
+            ItemMeta meta = item.getItemMeta();
+            if (meta == null) {
+                continue;
+            }
+            if (meta.getPersistentDataContainer().has(voteBookKey, PersistentDataType.BYTE)) {
+                contents[i] = null;
+            }
+        }
+        player.getInventory().setContents(contents);
+    }
+
+    private void removeExcludeBooks(Player player) {
+        if (player == null) {
+            return;
+        }
+        ItemStack[] contents = player.getInventory().getContents();
+        for (int i = 0; i < contents.length; i++) {
+            ItemStack item = contents[i];
+            if (item == null) {
+                continue;
+            }
+            ItemMeta meta = item.getItemMeta();
+            if (meta == null) {
+                continue;
+            }
+            if (meta.getPersistentDataContainer().has(excludeBookKey, PersistentDataType.BYTE)) {
+                contents[i] = null;
+            }
+        }
+        player.getInventory().setContents(contents);
+    }
+
+    private void removeMaskBooks(Player player) {
+        if (player == null) {
+            return;
+        }
+        ItemStack[] contents = player.getInventory().getContents();
+        for (int i = 0; i < contents.length; i++) {
+            ItemStack item = contents[i];
+            if (item == null) {
+                continue;
+            }
+            ItemMeta meta = item.getItemMeta();
+            if (meta == null) {
+                continue;
+            }
+            if (meta.getPersistentDataContainer().has(maskBookKey, PersistentDataType.BYTE)) {
+                contents[i] = null;
+            }
+        }
+        player.getInventory().setContents(contents);
+    }
+
+    private ItemStack createMemoryBook(List<String> words) {
+        ItemStack item = new ItemStack(Material.WRITTEN_BOOK);
+        BookMeta meta = (BookMeta) item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+        meta.setTitle(tr("Слова"));
+        meta.setAuthor("SixRooms");
+        meta.getPersistentDataContainer().set(memoryBookKey, PersistentDataType.BYTE, (byte) 1);
+        StringBuilder page = new StringBuilder();
+        for (int i = 0; i < words.size(); i++) {
+            page.append(i + 1).append(". ").append(words.get(i));
+            if (i < words.size() - 1) {
+                page.append("\n");
+            }
+        }
+        meta.setPages(page.toString());
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private void removeMemoryBooks(Player player) {
+        if (player == null) {
+            return;
+        }
+        ItemStack[] contents = player.getInventory().getContents();
+        for (int i = 0; i < contents.length; i++) {
+            ItemStack item = contents[i];
+            if (item == null) {
+                continue;
+            }
+            ItemMeta meta = item.getItemMeta();
+            if (meta == null) {
+                continue;
+            }
+            if (meta.getPersistentDataContainer().has(memoryBookKey, PersistentDataType.BYTE)) {
+                contents[i] = null;
+            }
+        }
+        player.getInventory().setContents(contents);
     }
 
     private boolean isPhoneItem(ItemStack item) {
@@ -2079,7 +4271,7 @@ public class SixRooms extends JavaPlugin implements Listener {
                 if (tntHolderId != null) {
                     if (tntHolderId.equals(player.getUniqueId())) {
                         lore.add(tr("§cДинамит у тебя"));
-                        lore.add(tntTransferAllowed ? tr("§eПередача доступна") : tr("§7Передача через 5 секунд"));
+                        lore.add(tntTransferAllowed ? tr("§eПередача доступна") : tr("§7Передача через %d секунд", TNT_TRANSFER_LOCK_SECONDS));
                     } else {
                         Player holder = Bukkit.getPlayer(tntHolderId);
                         if (holder != null) {
@@ -2103,6 +4295,16 @@ public class SixRooms extends JavaPlugin implements Listener {
                 }
             } else if (doorsRoundActive) {
                 lore.add(tr("§7Раунд с дверями"));
+            } else if (voteRoundActive) {
+                lore.add(tr("§7Раунд с голосованием"));
+            } else if (rouletteRoundActive) {
+                lore.add(tr("§7Раунд с рулеткой"));
+            } else if (memoryRoundActive) {
+                lore.add(tr("§7Раунд на память"));
+            } else if (bankRoundActive) {
+                lore.add(tr("§7Раунд с банком"));
+            } else if (excludeRoundActive) {
+                lore.add(tr("§7Раунд с вычеркиванием"));
             } else {
                 lore.add(tr("§7Подготовка к раунду"));
             }
@@ -2226,7 +4428,7 @@ public class SixRooms extends JavaPlugin implements Listener {
                 if (current != null && current.state == CallState.ACTIVE && current.caller.equals(session.caller) && current.callee.equals(session.callee)) {
                     endCall(current, tr("§eВремя разговора вышло."));
                 }
-            }, 40L * 20L).getTaskId();
+            }, SECOND_ROUND_CALL_SECONDS * 20L).getTaskId();
         }
     }
 
@@ -2283,7 +4485,12 @@ public class SixRooms extends JavaPlugin implements Listener {
         SECOND,
         THIRD,
         FOURTH,
-        FIFTH
+        FIFTH,
+        SIXTH,
+        SEVENTH,
+        EIGHTH,
+        NINTH,
+        TENTH
     }
 
     private static final class MaskDefinition {
@@ -2293,6 +4500,18 @@ public class SixRooms extends JavaPlugin implements Listener {
         private MaskDefinition(String name, String base64) {
             this.name = name;
             this.base64 = base64;
+        }
+    }
+
+    private static final class InventorySnapshot {
+        private final ItemStack[] contents;
+        private final ItemStack[] armor;
+        private final ItemStack offhand;
+
+        private InventorySnapshot(ItemStack[] contents, ItemStack[] armor, ItemStack offhand) {
+            this.contents = contents;
+            this.armor = armor;
+            this.offhand = offhand;
         }
     }
 
